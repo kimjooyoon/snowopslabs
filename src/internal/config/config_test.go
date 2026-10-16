@@ -1050,3 +1050,56 @@ func TestLoad_IngressClassFollowsTheProvider(t *testing.T) {
 		})
 	}
 }
+
+// For every key the first value that is not empty wins: environment, .env,
+// the profile's runtime.env, then the built-in default. A blank line in .env
+// leaves the key unset, so kind keeps its own storage class. Scripts get the
+// same value, or an empty one when only the built-in default applies.
+func TestLoad_FirstNonEmptyValueWins(t *testing.T) {
+	tests := []struct {
+		name       string
+		setEnv     bool
+		env        string
+		dotEnv     string
+		runtimeEnv string
+		want       string
+		wantScript string
+	}{
+		{name: "only the profile sets it", runtimeEnv: "STORAGE_CLASS=standard\n", want: "standard", wantScript: "standard"},
+		{name: ".env wins over the profile", dotEnv: "STORAGE_CLASS=fast\n", runtimeEnv: "STORAGE_CLASS=standard\n", want: "fast", wantScript: "fast"},
+		{name: "a blank .env line falls through to the profile", dotEnv: "STORAGE_CLASS=\n", runtimeEnv: "STORAGE_CLASS=standard\n", want: "standard", wantScript: "standard"},
+		{name: "a blank quoted .env value falls through to the profile", dotEnv: "STORAGE_CLASS=\"\"\n", runtimeEnv: "STORAGE_CLASS=standard\n", want: "standard", wantScript: "standard"},
+		{name: "a later .env line fills a blank earlier one", dotEnv: "STORAGE_CLASS=\nSTORAGE_CLASS=fast\n", runtimeEnv: "STORAGE_CLASS=standard\n", want: "fast", wantScript: "fast"},
+		{name: "blank everywhere gives the default", dotEnv: "STORAGE_CLASS=\n", runtimeEnv: "STORAGE_CLASS=\n", want: "local-path", wantScript: ""},
+		{name: "the environment wins over everything", setEnv: true, env: "env-class", dotEnv: "STORAGE_CLASS=fast\n", runtimeEnv: "STORAGE_CLASS=standard\n", want: "env-class", wantScript: "env-class"},
+		{name: "a blank environment variable is skipped", setEnv: true, dotEnv: "STORAGE_CLASS=\n", runtimeEnv: "STORAGE_CLASS=standard\n", want: "standard", wantScript: "standard"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			if tt.setEnv {
+				t.Setenv("STORAGE_CLASS", tt.env)
+			}
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, "runtimes", "kind"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".env"), []byte("PROFILE=kind\n"+tt.dotEnv), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "runtimes", "kind", "runtime.env"), []byte(tt.runtimeEnv), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(root)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.StorageClass != tt.want {
+				t.Errorf("StorageClass = %q, want %q", cfg.StorageClass, tt.want)
+			}
+			if got := cfg.ScriptEnv["STORAGE_CLASS"]; got != tt.wantScript {
+				t.Errorf("ScriptEnv[STORAGE_CLASS] = %q, want %q", got, tt.wantScript)
+			}
+		})
+	}
+}

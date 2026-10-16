@@ -113,8 +113,8 @@ func Load(projectRoot string) (*Config, error) {
 		ProjectRoot: projectRoot,
 	}
 
-	// .env is merged first, and mergeEnvFile never overwrites a key, so .env
-	// wins over runtime.env.
+	// .env is merged first, and mergeEnvFile never overwrites a key that has a
+	// value, so .env wins over runtime.env.
 	fileVals := map[string]string{}
 	mergeEnvFile(fileVals, filepath.Join(projectRoot, ".env"))
 	cfg.DomainSuffixPinned = resolveEnv(fileVals, "DOMAIN_SUFFIX", "") != ""
@@ -387,9 +387,9 @@ func MigrateState(legacy, target string) (bool, error) {
 	return true, nil
 }
 
-// mergeEnvFile parses a KEY=VALUE file into dst. Keys already in dst are kept,
-// so the file merged first wins. A missing or unreadable file is ignored,
-// because both env files are optional.
+// mergeEnvFile parses a KEY=VALUE file into dst. Keys already in dst with a
+// value are kept, so the file merged first wins. A missing or unreadable file
+// is ignored, because both env files are optional.
 func mergeEnvFile(dst map[string]string, path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -398,8 +398,9 @@ func mergeEnvFile(dst map[string]string, path string) {
 	parseEnvData(dst, data)
 }
 
-// parseEnvData parses dotenv-style content into dst. Keys already in dst are
-// kept, so the first occurrence wins.
+// parseEnvData parses dotenv-style content into dst. The first non-empty value
+// for a key wins; a blank one such as "KEY=" leaves the key open, so a later
+// line or file can still set it.
 func parseEnvData(dst map[string]string, data []byte) {
 	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -410,7 +411,7 @@ func parseEnvData(dst map[string]string, data []byte) {
 		if !ok {
 			continue
 		}
-		if _, exists := dst[key]; !exists {
+		if dst[key] == "" {
 			dst[key] = val
 		}
 	}

@@ -75,10 +75,9 @@ the `runtime.env`. Some defaults follow another key: `CLUSTER_NAME` is
 `<CLUSTER_NAME>.localhost` and `INGRESS_CLASS` takes the value of
 `INGRESS_PROVIDER`.
 
-An empty environment variable is skipped. An empty line in `.env`, such as
-`STORAGE_CLASS=`, also hides the profile's value, so the built-in default
-applies (`local-path`, even on kind). Delete or comment out the line to get the
-profile's value.
+An empty value counts as unset wherever it appears. An empty environment
+variable is skipped, and an empty line in `.env`, such as `STORAGE_CLASS=`,
+leaves the key to the profile, so kind still gets `standard`.
 
 The scripts and Make targets `labctl` runs receive every key from `.env` and
 `runtime.env`, resolved the same way.
