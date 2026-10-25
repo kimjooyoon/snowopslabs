@@ -20,3 +20,9 @@ an issue first.
 ## Template
 
 See [`0000-template.md`](0000-template.md).
+
+## Draft proposals
+
+- [Owned runs and cancellation requests](0002-owned-runs-and-cancellation.md):
+  distinguish live owners from interrupted work and keep cancellation requests
+  separate from execution completion. Not accepted or implemented.
