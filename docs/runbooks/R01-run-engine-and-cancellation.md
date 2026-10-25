@@ -137,6 +137,19 @@ $ pgrep -fl 'sleep 60' ; echo "exit=$?"
 **A surviving process here is a blocking finding**: it is precisely the v1 bug
 this wave exists to fix.
 
+The traffic CLI uses the same cancellation path. Run its hermetic interrupt
+test and the shell cleanup suite, which replace cluster tools with stand-ins:
+
+```bash
+$ go test -race -run '^TestTraffic_InterruptStopsAndRecordsTheOperation$' ./internal/cli/
+$ bats test/shell/traffic_start.bats
+```
+
+**Expect:** each traffic operation is recorded as cancelled. The shell tests
+check cancellation during creation and readiness, removal of created resources,
+and preservation of pre-existing namespace and ConfigMap objects. No cluster
+is contacted.
+
 ---
 
 ## 4. Killing labctl mid-run leaves a coherent record
@@ -160,7 +173,7 @@ Run the shutdown and native-process cases too:
 
 ```bash
 $ go test -race -count=1 -run 'TestStartPreservesAnotherEngine|TestShutdownTimeoutRetainsOwnership|TestRecoveryKeepsKeyWhileChildSurvives' ./internal/run/
-$ go test -race -count=1 -run 'TestLockProcessLifetime|TestLegacyOwnerMigration|TestMigrationRefusesUncertainOwners|TestMigrationRequiresOfflineStore' ./internal/runowner/ ./internal/store/
+$ go test -race -count=1 -run 'TestLockProcessLifetime|TestLegacyOwnerMigration|TestMigrationChecksOwners|TestMigrationRequiresOfflineStore' ./internal/runowner/ ./internal/store/
 ```
 
 **Expect:** PASS. A timed-out shutdown retains the owner lock and store until

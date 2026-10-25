@@ -3,8 +3,13 @@
 package cli
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/sagar2395/snowopslabs/internal/store"
 )
 
 // showTrafficEnv replaces the generator's start script with one that prints
@@ -61,7 +66,66 @@ func TestTraffic_Journey(t *testing.T) {
 		l.mustRun("traffic", "status"),
 		l.mustRun("traffic", "start"),
 		l.mustRun("traffic", "stop"),
+		l.mustRun("runs", "list"),
 	)
+}
+
+func TestTraffic_RecordsEveryOperation(t *testing.T) {
+	for _, op := range []string{"start", "stop", "status"} {
+		t.Run(op, func(t *testing.T) {
+			l := newTerminal(t)
+			l.mustRun("traffic", op)
+			r := l.mustRun("runs", "list")
+			if !strings.Contains(r.stdout, "traffic."+op) || !strings.Contains(r.stdout, "succeeded") {
+				t.Fatalf("traffic %s is missing from successful run history:\n%s", op, r.stdout)
+			}
+		})
+	}
+}
+
+func TestTraffic_InterruptStopsAndRecordsTheOperation(t *testing.T) {
+	for _, op := range []string{"start", "stop", "status"} {
+		t.Run(op, func(t *testing.T) {
+			l := newTerminal(t)
+			l.Write(t, "src/services/traffic/"+op+".sh", slowSetup)
+			ctx, interrupt := context.WithCancel(t.Context())
+			defer interrupt()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				deadline := time.NewTimer(5 * time.Second)
+				defer deadline.Stop()
+				tick := time.NewTicker(5 * time.Millisecond)
+				defer tick.Stop()
+				for {
+					if l.exists("src/services/traffic/STARTED") {
+						interrupt()
+						return
+					}
+					select {
+					case <-tick.C:
+					case <-deadline.C:
+						interrupt()
+						return
+					}
+				}
+			}()
+			r := l.runCtx(ctx, "traffic", op)
+			<-done
+			if r.exitCode() != 1 || !l.exists("src/services/traffic/STOPPED") {
+				t.Fatalf("interrupt did not stop traffic %s: exit=%d\n%s\n%s", op, r.exitCode(), r.stdout, r.stderr)
+			}
+			st, err := store.Open(t.Context(), filepath.Join(l.Home, "snowops.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			runs, err := st.ListRuns(t.Context(), store.RunFilter{Kind: "traffic." + op})
+			if err != nil || len(runs) != 1 || runs[0].Status != store.StatusCancelled {
+				t.Fatalf("cancelled traffic %s history=%+v, err=%v", op, runs, err)
+			}
+		})
+	}
 }
 
 func TestTraffic_Failures(t *testing.T) {
@@ -81,7 +145,7 @@ func TestTraffic_Failures(t *testing.T) {
 			func(t *testing.T, l *terminal) {
 				l.Write(t, "src/services/traffic/start.sh", "#!/usr/bin/env bash\necho 'k6 image not found' >&2\nexit 9\n")
 			},
-			[]string{"traffic", "start"}, "exit status 9"},
+			[]string{"traffic", "start"}, "failed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -95,6 +159,9 @@ func TestTraffic_Failures(t *testing.T) {
 			}
 			if tt.prepare == nil && strings.Contains(r.stdout, "traffic started") {
 				t.Errorf("the generator was started with settings that were refused:\n%s", r.stdout)
+			}
+			if tt.prepare != nil && !strings.Contains(r.stdout, "exit 9") {
+				t.Errorf("the failed run did not retain the script's exit code:\n%s", r.stdout)
 			}
 		})
 	}

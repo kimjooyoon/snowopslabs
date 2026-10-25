@@ -15,14 +15,12 @@ import (
 )
 
 // The commands that run through the run engine (lab, platform, scenario,
-// incident) share this setup: open the run store, build a run engine, submit
+// incident, traffic) share this setup: open the run store, build a run engine, submit
 // work through a service, and stream the run to the terminal.
 
-// newRunEngine opens the default run store and builds a run engine that is not
-// yet started. Commands that change state call Start; read-only commands must
-// not, because Start cancels runs it thinks were interrupted, including one
-// running in another terminal. Always defer cleanup, which shuts the engine
-// down and closes the store.
+// newRunEngine opens the default store and builds an unstarted engine.
+// Call Start for recorded operations; it preserves live owners.
+// Always defer cleanup to shut down the engine and close the store.
 func newRunEngine(ctx context.Context) (*run.Engine, *store.Store, func(), error) {
 	dbPath, err := store.DefaultPath()
 	if err != nil {

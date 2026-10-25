@@ -6,9 +6,31 @@ autoscaling play out under realistic load. The generator lives in its own
 
 Never use a `curl` loop in scenario or incident content - use this.
 
+`start`, `stop` and `status` are recorded operations. Each prints its run ID,
+streams its output and appears in `labctl runs list`. Read an operation's saved
+output with `labctl runs logs <id>` or cancel it with `labctl runs cancel <id>`.
+Ctrl-C cancels the operation being followed.
+
+Start and stop use the run engine's `traffic` lock; status takes no lock.
+The operation timeout is two minutes for start and stop, and 30 seconds for
+status. These limits apply to the command, not to the k6 Job's duration.
+
+Each CLI engine preserves other live owners. A status command in a second
+terminal leaves an active traffic operation running; another start or stop
+reports the run holding the traffic key. See the
+[recovery and cancellation limits](../../runbooks/R01-run-engine-and-cancellation.md#4-killing-labctl-mid-run-leaves-a-coherent-record)
+before cancelling or explicitly releasing interrupted work.
+
 ## `labctl traffic start`
 
 Starts the generator, replacing any active run.
+
+After start returns, the k6 Job keeps running in the cluster. Use
+`labctl traffic stop` to remove it. Cancelling a start during setup or the
+readiness wait removes the Job it creates and any namespace or ConfigMap it
+creates. A namespace or ConfigMap that already exists is preserved. Cleanup is
+bounded; if the cluster does not answer, the transcript names what could not
+be removed so you can inspect it before starting again.
 
 ```bash
 labctl traffic start                                # steady 10 rps for 10m against go-api

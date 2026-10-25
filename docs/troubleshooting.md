@@ -50,6 +50,7 @@ page collects them by symptom. `labctl doctor` checks your machine, and
 | A check says Prometheus or Grafana returned 404 | Another service on the lab's port answered instead of the lab. Re-run `labctl init`; it confirms the lab answers and moves it if not. |
 | Grafana dashboards show No data: a warning on the App picker, an empty Namespace picker, or `Unable to find datasource plugin` / `Plugin not registered` | Grafana cannot query Prometheus. Most often the lab's Grafana was installed before the fix for Grafana 13's plugin install on a read-only filesystem, and an existing lab keeps the values it was installed with. `labctl init` checks that Grafana can query Prometheus and re-applies Grafana when it cannot; `labctl platform up monitoring/grafana` does the same by hand. If init still reports `grafana still cannot query Prometheus`, check that the Prometheus pod runs: `kubectl -n monitoring get pods`. If you changed Grafana's admin password, set `GRAFANA_ADMIN_PASSWORD` in `.env` so init can run the check. |
 | An app pod is in `ImagePullBackOff` | Its image was not built into the cluster. `labctl app build <name>`, or use `--deploy-prereqs`. |
+| `Could not remove traffic job`, `configmap` or `namespace` after cancelling start | The cleanup request failed. When the cluster responds, inspect the saved run with `labctl runs logs <id>` and run `labctl traffic stop`. Cleanup preserves a namespace or ConfigMap that existed before start. |
 
 ## Windows (WSL2)
 

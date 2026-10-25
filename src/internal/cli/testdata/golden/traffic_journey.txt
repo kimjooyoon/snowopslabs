@@ -4,10 +4,34 @@ spike
 steady
 
 $ labctl traffic status
+Traffic status started (run <run>). Following output - Ctrl-C stops it.
+
+Run <run> - traffic.status traffic (<state>)
+
 not running
 
+Succeeded in <dur>.
+
 $ labctl traffic start
+Start traffic: steady started (run <run>). Following output - Ctrl-C stops it.
+
+Run <run> - traffic.start traffic (<state>)
+
 traffic started
 
+Succeeded in <dur>.
+
 $ labctl traffic stop
+Stop traffic started (run <run>). Following output - Ctrl-C stops it.
+
+Run <run> - traffic.stop traffic (<state>)
+
 traffic stopped
+
+Succeeded in <dur>.
+
+$ labctl runs list
+ID                               KIND             TARGET    STATUS      STARTED   DURATION
+<run>   traffic.stop     traffic   succeeded   <dur> ago    <dur>
+<run>   traffic.start    traffic   succeeded   <dur> ago    <dur>
+<run>   traffic.status   traffic   succeeded   <dur> ago    <dur>

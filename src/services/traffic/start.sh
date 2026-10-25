@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Start (or restart) the k6 traffic generator with the selected profile.
 # Config via env (set by labctl or the caller):
 #   TRAFFIC_PROFILE   steady | spike | soak            (default: steady)
@@ -8,7 +8,7 @@
 #   TRAFFIC_NAMESPACE namespace for the generator       (default: traffic)
 #   K6_IMAGE          k6 container image                (default: grafana/k6:0.50.0)
 #   K6_PROMETHEUS_RW_SERVER_URL  optional remote-write endpoint for k6 metrics
-set -euo pipefail
+set -eu
 
 NAMESPACE="${TRAFFIC_NAMESPACE:-traffic}"
 PROFILE="${TRAFFIC_PROFILE:-steady}"
@@ -22,6 +22,42 @@ DURATION="${TRAFFIC_DURATION:-}"
 METHOD="${TRAFFIC_METHOD:-GET}"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:0.50.0}"
 RW_URL="${K6_PROMETHEUS_RW_SERVER_URL:-}"
+
+namespace_owned=0
+configmap_owned=0
+job_owned=0
+start_complete=0
+readiness_pid=
+
+cleanup_start() {
+  cleanup_status=$?
+  trap - 0
+  trap '' HUP INT TERM
+  if [ -n "$readiness_pid" ]; then
+    kill "$readiness_pid" 2>/dev/null || true
+    wait "$readiness_pid" 2>/dev/null || true
+  fi
+  if [ "$start_complete" -eq 0 ]; then
+    if [ "$job_owned" -eq 1 ]; then
+      kubectl delete job traffic-k6 --namespace "$NAMESPACE" --ignore-not-found \
+        --wait=false --request-timeout=2s || echo "Could not remove traffic job; run labctl traffic stop when the cluster responds." >&2
+    fi
+    if [ "$configmap_owned" -eq 1 ]; then
+      kubectl delete configmap traffic-profile --namespace "$NAMESPACE" --ignore-not-found \
+        --wait=false --request-timeout=2s || echo "Could not remove traffic configmap; run labctl traffic stop when the cluster responds." >&2
+    fi
+    if [ "$namespace_owned" -eq 1 ]; then
+      kubectl delete namespace "$NAMESPACE" --ignore-not-found \
+        --wait=false --request-timeout=2s || echo "Could not remove traffic namespace; run labctl traffic stop when the cluster responds." >&2
+    fi
+  fi
+  exit "$cleanup_status"
+}
+
+trap cleanup_start 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # k6's own client-side metrics (requests sent, latency as the CLIENT saw it,
 # failures) are the other half of evaluating traffic: the app's /metrics only
@@ -59,11 +95,21 @@ else
   echo "  metrics:  k6 client-side metrics stay in the pod log (no Prometheus receiver found)"
 fi
 
-# Namespace + profile script (idempotent)
-kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-kubectl create configmap traffic-profile \
+# Record ownership before applying so cancellation also covers an interrupted write.
+namespace_existing=$(kubectl get namespace "$NAMESPACE" --ignore-not-found -o name)
+namespace_manifest=$(kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml)
+if [ -z "$namespace_existing" ]; then
+  namespace_owned=1
+fi
+printf '%s\n' "$namespace_manifest" | kubectl apply -f -
+configmap_existing=$(kubectl get configmap traffic-profile --namespace "$NAMESPACE" --ignore-not-found -o name)
+configmap_manifest=$(kubectl create configmap traffic-profile \
   --from-file=script.js="$PROFILE_FILE" \
-  --namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+  --namespace "$NAMESPACE" --dry-run=client -o yaml)
+if [ -z "$configmap_existing" ]; then
+  configmap_owned=1
+fi
+printf '%s\n' "$configmap_manifest" | kubectl apply -f -
 
 # Replace any previous run: starting while running restarts with new settings.
 kubectl delete job traffic-k6 --namespace "$NAMESPACE" --ignore-not-found --wait=true
@@ -74,6 +120,7 @@ if [ -n "$RW_URL" ]; then
   K6_ARGS='["run", "-o", "experimental-prometheus-rw", "/scripts/script.js"]'
 fi
 
+job_owned=1
 kubectl apply -f - <<EOF
 apiVersion: batch/v1
 kind: Job
@@ -136,7 +183,10 @@ echo "Traffic generator applied. Verifying it actually starts..."
 
 # Surface the common failure modes instead of leaving the user guessing why
 # "nothing is happening": image can't be pulled, or the target is unreachable.
-if kubectl wait --for=condition=Ready pod -l app=traffic-k6 -n "$NAMESPACE" --timeout=90s 2>/dev/null; then
+kubectl wait --for=condition=Ready pod -l app=traffic-k6 -n "$NAMESPACE" --timeout=90s 2>/dev/null &
+readiness_pid=$!
+if wait "$readiness_pid"; then
+  readiness_pid=
   echo "✓ k6 pod is running. First output (should show it hitting ${TARGET}):"
   echo "----------------------------------------------------------------------"
   kubectl logs job/traffic-k6 -n "$NAMESPACE" --tail=20 2>/dev/null || echo "  (no logs yet - k6 is warming up)"
@@ -144,6 +194,7 @@ if kubectl wait --for=condition=Ready pod -l app=traffic-k6 -n "$NAMESPACE" --ti
   echo "If you see 'dial: connection refused' or timeouts above, the TARGET is"
   echo "not reachable from the cluster - check the service exists and the URL."
 else
+  readiness_pid=
   echo "⚠ k6 pod did NOT become Ready within 90s. Diagnosis:"
   kubectl get pods -n "$NAMESPACE" -l app=traffic-k6 -o wide 2>/dev/null || true
   echo "--- recent events ---"
@@ -166,3 +217,4 @@ TARGET_WL="${WORKLOAD_NAME:-go-api}"
 TARGET_NS="${WORKLOAD_NAMESPACE:-$TARGET_WL}"
 echo "  See it in ${TARGET_WL}'s logs:  kubectl -n ${TARGET_NS} logs deploy/${TARGET_WL} -f | grep request"
 echo "  Watch impact in Grafana next to the app's request-rate panels."
+start_complete=1

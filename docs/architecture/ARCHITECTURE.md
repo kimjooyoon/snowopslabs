@@ -105,10 +105,12 @@ This is the heart of the v2 redesign and the single biggest departure from v1,
 where `executor.RunScript` called `cmd.Run()` with no context, kept job state in
 a 100-entry in-memory map, and dropped log lines for slow clients.
 
-That v1 executor still ships. The CLI's `lab`, `platform`, `scenario` and
-`incident` commands use the run engine. The web UI's mutating `/api/v2` actions,
-and the CLI's challenge setup, still start `internal/executor` jobs directly. Until the
-[move onto the run engine](https://github.com/sagar2395/snowopslabs/issues/121) lands, the guarantees below hold only for work submitted as a `run.Spec`.
+That v1 executor still ships. The CLI's `lab`, `platform`, `scenario`,
+`incident` and `traffic` commands use the run engine. The web UI's mutating
+`/api/v2` actions, and the CLI's challenge setup, still start `internal/executor`
+jobs directly. Until the [move onto the run engine](https://github.com/sagar2395/snowopslabs/issues/121)
+lands, the guarantees below hold only for work submitted as a `run.Spec`.
+
 
 ### 3.1 Lifecycle
 
@@ -176,6 +178,14 @@ finish. Owner file
 locks do not prove that surviving children stopped, and ordinary remote
 cancellation can still release a key before cleanup returns. See
 [the recovery design](../rfcs/0002-owned-runs-and-cancellation.md) for that limit.
+
+The traffic service submits `traffic.start` and `traffic.stop` with the
+`traffic` lock. `traffic.status` is a recorded probe with no lock. Each run
+covers one script invocation; the k6 Job continues after a successful start
+returns. The start script handles cancellation by removing the Job and only
+the namespace and ConfigMap it creates. It preserves pre-existing namespace
+and ConfigMap objects, and bounds cleanup requests so shutdown can finish.
+
 
 ### 3.4 Durable, replayable logs
 

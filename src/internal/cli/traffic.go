@@ -3,27 +3,30 @@
 package cli
 
 import (
-	"path/filepath"
+	"context"
+	"io"
+	"maps"
 	"strings"
 
+	trafficsvc "github.com/sagar2395/snowopslabs/internal/service/traffic"
 	"github.com/sagar2395/snowopslabs/internal/traffic"
 	"github.com/spf13/cobra"
 )
 
-var trafficOpts traffic.Options
-
-var trafficCmd = &cobra.Command{
-	Use:   "traffic",
-	Short: "Generate synthetic load against lab apps (k6)",
-	Long: `Runs a k6 load generator in-cluster with a selectable profile, so
+func trafficCmd() *cobra.Command {
+	var opts traffic.Options
+	cmd := &cobra.Command{
+		Use:   "traffic",
+		Short: "Generate synthetic load against lab apps (k6)",
+		Long: `Runs a k6 load generator in-cluster with a selectable profile, so
 scenarios and incidents play out under realistic traffic. Watch the impact
 in Grafana next to the app's own request metrics.`,
-}
+	}
 
-var trafficStartCmd = &cobra.Command{
-	Use:   "start",
-	Short: "Start (or restart) the traffic generator",
-	Long: `Starts the k6 generator with the chosen profile. Starting while a
+	start := &cobra.Command{
+		Use:   "start",
+		Short: "Start (or restart) the traffic generator",
+		Long: `Starts the k6 generator with the chosen profile. Starting while a
 run is active replaces it with the new settings.
 
 Profiles (services/traffic/profiles/):
@@ -37,65 +40,84 @@ Profiles (services/traffic/profiles/):
 The target defaults to the app chosen with --app (go-api when none is), at
 its in-cluster root (/), which is access-logged. Point anywhere else with
 --target, e.g. --target http://echo-server.echo-server.svc.cluster.local:8080/`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if trafficOpts.Target == "" {
-			trafficOpts.Target = scenes.Workload.URL()
-		}
-		if err := trafficOpts.Validate(cfg.ProjectRoot); err != nil {
-			return err
-		}
-		for k, v := range trafficOpts.Env() {
-			scriptExec.SetEnv(k, v)
-		}
-		_, err := scriptExec.RunScriptStreamed("Start traffic: "+trafficOpts.Profile,
-			filepath.Join(traffic.ScriptDir, "start.sh"))
-		return err
-	},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			requested := opts
+			if requested.Target == "" {
+				requested.Target = scenes.Workload.URL()
+			}
+			return runTrafficOperation(cmd.Context(), cmd.OutOrStdout(), "Start traffic: "+requested.Profile,
+				func(ctx context.Context, svc *trafficsvc.Service) (string, error) {
+					return svc.Start(ctx, requested)
+				})
+		},
+	}
+
+	stop := &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the traffic generator and clean up",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runTrafficOperation(cmd.Context(), cmd.OutOrStdout(), "Stop traffic",
+				func(ctx context.Context, svc *trafficsvc.Service) (string, error) {
+					return svc.Stop(ctx)
+				})
+		},
+	}
+
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Show traffic generator status and recent k6 output",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runTrafficOperation(cmd.Context(), cmd.OutOrStdout(), "Traffic status",
+				func(ctx context.Context, svc *trafficsvc.Service) (string, error) {
+					return svc.Status(ctx)
+				})
+		},
+	}
+
+	profiles := &cobra.Command{
+		Use:   "profiles",
+		Short: "List available traffic profiles",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			profiles, err := traffic.Profiles(cfg.ProjectRoot)
+			if err != nil {
+				return err
+			}
+			cmd.Println(strings.Join(profiles, "\n"))
+			return nil
+		},
+	}
+
+	start.Flags().StringVar(&opts.Profile, "profile", "steady", "load profile (see 'labctl traffic profiles')")
+	start.Flags().StringVar(&opts.Target, "target", "", "URL to load (default: the --app workload's root /, in-cluster)")
+	start.Flags().IntVar(&opts.RPS, "rps", 10, "requests per second (baseline for the spike profile)")
+	start.Flags().StringVar(&opts.Duration, "duration", "", "run length, e.g. 10m or 1h30m (default: profile-specific)")
+	start.Flags().StringVar(&opts.Method, "method", "", "HTTP method for write/errors profiles (GET/POST/PUT/PATCH/DELETE; default: profile-specific)")
+
+	cmd.AddCommand(start, stop, status, profiles)
+	return cmd
 }
 
-var trafficStopCmd = &cobra.Command{
-	Use:   "stop",
-	Short: "Stop the traffic generator and clean up",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		_, err := scriptExec.RunScriptStreamed("Stop traffic",
-			filepath.Join(traffic.ScriptDir, "stop.sh"))
+func runTrafficOperation(ctx context.Context, out io.Writer, verb string,
+	submit func(context.Context, *trafficsvc.Service) (string, error),
+) error {
+	eng, st, cleanup, err := newRunEngine(ctx)
+	if err != nil {
 		return err
-	},
-}
+	}
+	defer cleanup()
 
-var trafficStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show traffic generator status and recent k6 output",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		_, err := scriptExec.RunScriptStreamed("Traffic status",
-			filepath.Join(traffic.ScriptDir, "status.sh"))
+	env := make(map[string]string, len(cfg.ScriptEnv))
+	maps.Copy(env, cfg.ScriptEnv)
+	maps.Copy(env, scriptEnv())
+	svc, err := trafficsvc.New(eng, cfg.ProjectRoot, env)
+	if err != nil {
 		return err
-	},
-}
-
-var trafficProfilesCmd = &cobra.Command{
-	Use:   "profiles",
-	Short: "List available traffic profiles",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		profiles, err := traffic.Profiles(cfg.ProjectRoot)
-		if err != nil {
-			return err
-		}
-		cmd.Println(strings.Join(profiles, "\n"))
-		return nil
-	},
+	}
+	return runEngineOperation(ctx, out, eng, st, verb, func() (string, error) {
+		return submit(ctx, svc)
+	})
 }
 
 func init() {
-	trafficStartCmd.Flags().StringVar(&trafficOpts.Profile, "profile", "steady", "load profile (see 'labctl traffic profiles')")
-	trafficStartCmd.Flags().StringVar(&trafficOpts.Target, "target", "", "URL to load (default: the --app workload's root /, in-cluster)")
-	trafficStartCmd.Flags().IntVar(&trafficOpts.RPS, "rps", 10, "requests per second (baseline for the spike profile)")
-	trafficStartCmd.Flags().StringVar(&trafficOpts.Duration, "duration", "", "run length, e.g. 10m or 1h30m (default: profile-specific)")
-	trafficStartCmd.Flags().StringVar(&trafficOpts.Method, "method", "", "HTTP method for write/errors profiles (GET/POST/PUT/PATCH/DELETE; default: profile-specific)")
-
-	trafficCmd.AddCommand(trafficStartCmd)
-	trafficCmd.AddCommand(trafficStopCmd)
-	trafficCmd.AddCommand(trafficStatusCmd)
-	trafficCmd.AddCommand(trafficProfilesCmd)
-	rootCmd.AddCommand(trafficCmd)
+	rootCmd.AddCommand(trafficCmd())
 }
