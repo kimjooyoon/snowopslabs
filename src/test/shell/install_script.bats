@@ -115,3 +115,61 @@ release() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"is not on your PATH"* ]] || false
 }
+
+@test "the PATH hint names the zsh startup file and is one paste-safe command" {
+  release v1
+  run env PATH="/usr/bin:/bin:/usr/sbin:/sbin" SHELL="/bin/zsh" sh "$CLONE/install.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HOME/.zshrc"* ]] || false
+  [[ "$output" == *"echo 'export PATH="*"' >>"* ]] || false
+  [[ "$output" == *"&& source"* ]] || false
+  # The printed command must be paste-safe: single quotes inside, so the
+  # nested double quotes of the export line survive the echo.
+  [[ "$output" != *'echo "export PATH='* ]] || false
+}
+
+@test "the PATH hint names the bash startup file for the platform" {
+  release v1
+  if [ "$OS" = darwin ]; then
+    run env PATH="/usr/bin:/bin:/usr/sbin:/sbin" SHELL="/bin/bash" sh "$CLONE/install.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$HOME/.bash_profile"* ]] || false
+  else
+    run env PATH="/usr/bin:/bin:/usr/sbin:/sbin" SHELL="/bin/bash" sh "$CLONE/install.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$HOME/.bashrc"* ]] || false
+  fi
+}
+
+@test "the printed PATH line keeps the home placeholder so it survives a moved home directory" {
+  release v1
+  run env PATH="/usr/bin:/bin:/usr/sbin:/sbin" SHELL="/bin/zsh" sh "$CLONE/install.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'export PATH="$HOME/.local/bin:$PATH"'* ]] || false
+}
+
+@test "an unknown shell still gets a PATH line to add by hand" {
+  release v1
+  run env PATH="/usr/bin:/bin:/usr/sbin:/sbin" SHELL="/usr/bin/fish" sh "$CLONE/install.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is not on your PATH"* ]] || false
+  [[ "$output" == *"export PATH="* ]] || false
+  [[ "$output" != *"source"* ]] || false
+}
+
+@test "the printed PATH command actually works" {
+  release v1
+  run env PATH="/usr/bin:/bin:/usr/sbin:/sbin" SHELL="/bin/zsh" sh "$CLONE/install.sh"
+  [ "$status" -eq 0 ]
+  # Take the exact line the installer printed and run it: it must create the
+  # startup file when it is missing and leave PATH set in that shell.
+  line="$(printf '%s\n' "$output" | grep -F 'export PATH=' | head -1 | sed 's/^[[:space:]]*//')"
+  [ -n "$line" ]
+  # `source` is what the printed command uses, so run it under bash the way a
+  # user's zsh would run it.
+  run bash -c "$line"
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.zshrc" ]
+  run bash -c "source \"$HOME/.zshrc\"; printf '%s' \"\$PATH\""
+  [[ "$output" == *"$HOME/.local/bin"* ]] || false
+}

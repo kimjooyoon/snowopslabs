@@ -8,7 +8,7 @@ page collects them by symptom. `labctl doctor` checks your machine, and
 
 | Symptom | Cause and fix |
 |---|---|
-| `labctl: command not found` after installing | `~/.local/bin` is not on your `PATH`. Add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` or `~/.zshrc` and open a new terminal. |
+| `labctl: command not found` after installing | `~/.local/bin` is not on your `PATH`. The installer prints one command that adds it to the right startup file (`~/.zshrc`, `~/.bash_profile` or `~/.bashrc`); paste it as it is, or add `export PATH="$HOME/.local/bin:$PATH"` to that file yourself and open a new terminal. |
 | `could not find your lab` | labctl does not know where your clone is. Run `./install.sh` in your clone once (it records it; `make cli-install` does the same for a source build), `cd` into the clone, or set `SNOWOPS_LAB_DIR`. |
 | `the lab recorded in ~/.snowops/lab-dir … is gone` | You moved or deleted your clone. Run `./install.sh` in its new place. |
 | `labctl is X but the lab in … is Y` | Your clone moved to another release (for example after `git merge origin/stable`). Run `./install.sh` in the clone to get the matching labctl. |

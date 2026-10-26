@@ -66,6 +66,13 @@ $ cd ~ && labctl scenario list | head -3     # works outside the clone
 the next steps. No password prompt. `~/.snowops/lab-dir` holds the clone's
 path, and `scenario list` works from `~`.
 
+The PATH hint is one command you can paste as it is, for the shell you are
+logged in with: `~/.zshrc` on zsh, `~/.bash_profile` on macOS bash,
+`~/.bashrc` on Linux bash. The command appends the `export PATH=` line to that
+file, creating it when it is missing, and sources it, so `labctl` works in the
+current terminal too. On a shell the installer does not recognise (fish, for
+example) it prints the `export PATH=` line to add by hand instead.
+
 ## 2. Doctor on an empty machine
 
 ```bash

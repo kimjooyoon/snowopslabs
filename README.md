@@ -168,9 +168,10 @@ cd snowopslabs
 `stable` always points at the latest release; to pin one, clone with
 `--branch v1.5.0` instead. `install.sh` downloads the `labctl` binary that
 matches your clone into `~/.local/bin`, verifies its checksum and needs no sudo.
-It also records where your clone is, so `labctl` works from any directory. It
-prints the line to add to your shell profile if `~/.local/bin` is not on your
-`PATH` yet.
+It also records where your clone is, so `labctl` works from any directory. If
+`~/.local/bin` is not on your `PATH` yet, it prints one command that adds it -
+to the right startup file for your shell (`~/.zshrc`, `~/.bash_profile` or
+`~/.bashrc`), created for you if it does not exist yet.
 
 On Windows, clone inside WSL2, in your Linux home (`cd ~`), not under `/mnt/c`.
 

@@ -70,6 +70,44 @@ lab_version() {
   echo "$version"
 }
 
+# Tell the user how to put $BIN_DIR on their PATH with one command they can
+# paste. The login shell decides which startup file the PATH line belongs in:
+# zsh reads ~/.zshrc, bash on macOS reads ~/.bash_profile, bash on Linux reads
+# ~/.bashrc. The printed command creates that file when it is missing, so a
+# fresh Mac with no ~/.zshrc does not need one hand-written first.
+path_hint() {
+  rc_file=""
+  case "${SHELL:-}" in
+    */zsh) rc_file="$HOME/.zshrc" ;;
+    */bash)
+      if [ "$os" = darwin ]; then
+        rc_file="$HOME/.bash_profile"
+      else
+        rc_file="$HOME/.bashrc"
+      fi
+      ;;
+  esac
+
+  # Keep $HOME in the printed line when labctl goes to the default place, so
+  # the line stays right if the home directory ever moves. A custom
+  # SNOWOPS_BIN_DIR is printed as the absolute path it is.
+  if [ "$BIN_DIR" = "$HOME/.local/bin" ]; then
+    path_literal='$HOME/.local/bin'
+  else
+    path_literal="$BIN_DIR"
+  fi
+
+  say ""
+  if [ -z "$rc_file" ]; then
+    say "$BIN_DIR is not on your PATH. Add this line to your shell's startup file, then open a new terminal:"
+    say "  export PATH=\"$BIN_DIR:\$PATH\""
+    return
+  fi
+
+  say "$BIN_DIR is not on your PATH. Run this to add it (it creates $rc_file if it is missing):"
+  say "  echo 'export PATH=\"$path_literal:\$PATH\"' >> \"$rc_file\" && source \"$rc_file\""
+}
+
 main() {
   command -v curl >/dev/null 2>&1 || fail "curl is required"
   command -v tar >/dev/null 2>&1 || fail "tar is required"
@@ -117,9 +155,7 @@ main() {
   case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *)
-      say ""
-      say "$BIN_DIR is not on your PATH. Add this line to ~/.bashrc or ~/.zshrc, then open a new terminal:"
-      say "  export PATH=\"$BIN_DIR:\$PATH\""
+      path_hint
       ;;
   esac
   say ""

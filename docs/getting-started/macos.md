@@ -31,6 +31,9 @@ labctl init
 `git` comes with Apple's Command Line Tools; if they are missing, the first
 `git` command offers to install them. `install.sh` puts `labctl` in
 `~/.local/bin` and records your clone, so `labctl` works from any directory.
+If `~/.local/bin` is not on your `PATH`, the installer prints one command that
+adds it to `~/.zshrc` (or `~/.bash_profile` on bash), creating that file for
+you if it is missing - paste it as it is, then open a new terminal.
 
 `init` installs `kubectl`, `helm`, `k3d`, `colima`, `docker` and
 `docker-buildx` with Homebrew (a tool you already have at a new enough version
