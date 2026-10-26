@@ -48,7 +48,8 @@ components:
 func TestEngine_Demand(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "kafka-lab", demandScenario)
-	eng := NewEngine(root, "k3d.local", "k3d", "observability")
+	eng := NewEngine(root, "k3d.local", "k3d")
+	eng.MonitoringNamespace = "observability"
 	s, err := eng.Get("kafka-lab")
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +97,7 @@ func TestAdoptedFrom(t *testing.T) {
 }
 
 func TestEngine_Demand_UnreadableMemoryKeepsSharedItems(t *testing.T) {
-	eng := NewEngine(t.TempDir(), "k3d.local", "k3d", "monitoring")
+	eng := NewEngine(t.TempDir(), "k3d.local", "k3d")
 	s := &Scenario{
 		Name:          "broken",
 		Requirements:  Requirements{Memory: "lots"},
@@ -116,7 +117,7 @@ func TestEngine_ActiveDemands(t *testing.T) {
 	writeScenario(t, root, "kafka-lab", demandScenario)
 	writeScenario(t, root, "plain", "name: plain\ndisplayName: Plain\ndescription: x\ncategory: testing\n")
 	writeScenario(t, root, "idle", "name: idle\ndisplayName: Idle\ndescription: x\ncategory: testing\n")
-	eng := NewEngine(root, "k3d.local", "k3d", "monitoring")
+	eng := NewEngine(root, "k3d.local", "k3d")
 	for _, name := range []string{"kafka-lab", "plain"} {
 		if err := eng.markActive(name, nil); err != nil {
 			t.Fatal(err)
@@ -174,7 +175,7 @@ components:
 			if err := os.WriteFile(filepath.Join(root, "scenarios", "gated", "step.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // test script must be executable
 				t.Fatal(err)
 			}
-			eng := NewEngine(root, "k3d.local", "k3d", "monitoring")
+			eng := NewEngine(root, "k3d.local", "k3d")
 			eng.SetOutput(io.Discard)
 			var asked capacity.Demand
 			eng.Admit = func(_ context.Context, _ io.Writer, next capacity.Demand) error {
@@ -217,7 +218,7 @@ func TestEngine_Down_CallsRelease(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
 			writeScenario(t, root, "drill", "name: drill\ndisplayName: Drill\ndescription: x\ncategory: testing\n")
-			eng := NewEngine(root, "k3d.local", "k3d", "monitoring")
+			eng := NewEngine(root, "k3d.local", "k3d")
 			var out strings.Builder
 			eng.SetOutput(&out)
 			if err := eng.markActive("drill", nil); err != nil {

@@ -132,11 +132,9 @@ func (e *Engine) output() io.Writer {
 }
 
 // NewEngine creates a scenario engine by scanning the scenarios/ directory.
-func NewEngine(projectRoot, domainSuffix, profile string, monitoringNamespace ...string) *Engine {
-	ns := "monitoring"
-	if len(monitoringNamespace) > 0 && monitoringNamespace[0] != "" {
-		ns = monitoringNamespace[0]
-	}
+// MonitoringNamespace starts as "monitoring"; a caller that uses another
+// namespace sets the field on the returned engine.
+func NewEngine(projectRoot, domainSuffix, profile string) *Engine {
 	// Start bound to the default app, with its declared contract, so the
 	// capability check works even if the caller never binds another app.
 	bound := workload.Default(workload.DefaultApp)
@@ -149,7 +147,7 @@ func NewEngine(projectRoot, domainSuffix, profile string, monitoringNamespace ..
 		DomainSuffix:        domainSuffix,
 		IngressURLSuffix:    domainSuffix,
 		Profile:             profile,
-		MonitoringNamespace: ns,
+		MonitoringNamespace: "monitoring",
 		Workload:            bound,
 		Contract:            contract,
 		Hooks:               extension.DefaultHooks(),

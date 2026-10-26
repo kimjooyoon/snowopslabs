@@ -71,7 +71,9 @@ func newTestEngine(t *testing.T) *Engine {
 	if err := os.MkdirAll(filepath.Join(root, "scenarios"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return NewEngine(root, "k3d.local", "k3d", "observability")
+	e := NewEngine(root, "k3d.local", "k3d")
+	e.MonitoringNamespace = "observability"
+	return e
 }
 
 // installHelm and uninstallHelm must resolve the component namespace the same
@@ -578,7 +580,7 @@ components:
 					t.Fatal(err)
 				}
 			}
-			eng := NewEngine(root, "k3d.local", "k3d", "monitoring")
+			eng := NewEngine(root, "k3d.local", "k3d")
 			var out strings.Builder
 			eng.SetOutput(&out)
 			if err := eng.markActive("drill", nil); err != nil {

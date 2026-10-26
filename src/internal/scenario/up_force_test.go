@@ -29,7 +29,7 @@ displayName: Force Test
 description: no components, no prerequisites
 category: testing
 `)
-	eng := NewEngine(root, "k3d.local", "k3d", "monitoring")
+	eng := NewEngine(root, "k3d.local", "k3d")
 	if err := eng.markActive("force-test", nil); err != nil {
 		t.Fatalf("markActive: %v", err)
 	}
@@ -57,7 +57,7 @@ prerequisites:
   platform:
     - monitoring/grafana
 `)
-	eng := NewEngine(root, "k3d.local", "k3d", "monitoring")
+	eng := NewEngine(root, "k3d.local", "k3d")
 	s, err := eng.Get("needs-prereqs")
 	if err != nil {
 		t.Fatal(err)

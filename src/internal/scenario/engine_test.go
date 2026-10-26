@@ -239,7 +239,7 @@ func TestResolveTemplate(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "scenarios"), 0755)
 
-	engine := NewEngine(root, "k3d.local", "k3d", "monitoring")
+	engine := NewEngine(root, "k3d.local", "k3d")
 
 	tests := []struct {
 		input    string
@@ -269,12 +269,32 @@ func TestResolveTemplate(t *testing.T) {
 	}
 }
 
+// NewEngine starts in the "monitoring" namespace; a caller that uses another
+// one sets MonitoringNamespace on the engine, as labctl's root command does.
+func TestNewEngine_MonitoringNamespace(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "scenarios"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := NewEngine(root, "k3d.local", "k3d")
+	if engine.MonitoringNamespace != "monitoring" {
+		t.Errorf("default MonitoringNamespace = %q, want %q", engine.MonitoringNamespace, "monitoring")
+	}
+
+	engine.MonitoringNamespace = "observability"
+	if got := engine.ResolveTemplate("ns: {{.MonitoringNamespace}}"); got != "ns: observability" {
+		t.Errorf("ResolveTemplate after setting MonitoringNamespace = %q, want %q", got, "ns: observability")
+	}
+}
+
 // componentNamespace must expand template variables, since install and
 // uninstall both use it to find the namespace.
 func TestComponentNamespace_ResolvesTemplate(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "scenarios"), 0755)
-	engine := NewEngine(root, "k3d.local", "k3d", "observability")
+	engine := NewEngine(root, "k3d.local", "k3d")
+	engine.MonitoringNamespace = "observability"
 
 	cases := []struct {
 		name     string

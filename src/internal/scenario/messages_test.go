@@ -33,7 +33,7 @@ checks:
     operator: ">="
     value: "1"
 `)
-				eng := NewEngine(root, "k3d.local", "k3d", "monitoring")
+				eng := NewEngine(root, "k3d.local", "k3d")
 				var out bytes.Buffer
 				eng.SetOutput(&out)
 				if err := eng.Up("with-checks", &recordingExec{}, false); err != nil {
@@ -49,7 +49,7 @@ checks:
 				for _, dir := range []string{"first", "second"} {
 					writeScenario(t, root, dir, "name: same-name\ndisplayName: Same\ndescription: x\ncategory: testing\n")
 				}
-				eng := NewEngine(root, "k3d.local", "k3d", "monitoring")
+				eng := NewEngine(root, "k3d.local", "k3d")
 				var msgs []string
 				for _, err := range eng.LoadErrors() {
 					msgs = append(msgs, err.Error())
@@ -62,7 +62,7 @@ checks:
 			name: "down carries on with the current app when the recorded one is gone",
 			setup: func(t *testing.T, root string) string {
 				writeScenario(t, root, "orphaned", "name: orphaned\ndisplayName: Orphaned\ndescription: x\ncategory: testing\n")
-				eng := NewEngine(root, "k3d.local", "k3d", "monitoring")
+				eng := NewEngine(root, "k3d.local", "k3d")
 				eng.Workload.Name = "removed-app"
 				if err := eng.markActive("orphaned", nil); err != nil {
 					t.Fatalf("markActive: %v", err)

@@ -47,7 +47,8 @@ checks:
 func TestChecksWithVars_RendersWhatVerifyRenders(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "vars-demo", varsScenario)
-	e := NewEngine(root, "lab.test", "k3d", "observability")
+	e := NewEngine(root, "lab.test", "k3d")
+	e.MonitoringNamespace = "observability"
 	if err := e.markActive("vars-demo", map[string]string{"Threshold": "15"}); err != nil {
 		t.Fatalf("markActive: %v", err)
 	}
