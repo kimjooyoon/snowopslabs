@@ -32,7 +32,7 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize the lab (setup tools + create cluster + install platform)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, out := cmdContext(cmd), cmd.OutOrStdout()
+		ctx, out := cmd.Context(), cmd.OutOrStdout()
 
 		fmt.Fprintln(out, "=== Setting up tools ===")
 		if err := scriptExec.RunScript("bootstrap/setup-tools.sh", cfg.Profile); err != nil {
@@ -185,15 +185,6 @@ func checkClusterHealthy(ctx context.Context, out io.Writer) error {
 	}
 	fmt.Fprintln(out, "API server ready; all nodes Ready.")
 	return nil
-}
-
-// cmdContext is the command's context, or Background when it has none, as
-// when a test calls RunE directly.
-func cmdContext(cmd *cobra.Command) context.Context {
-	if ctx := cmd.Context(); ctx != nil {
-		return ctx
-	}
-	return context.Background()
 }
 
 // printPostInitHints prints the lab's URLs and next steps. It reloads the

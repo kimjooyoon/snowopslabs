@@ -170,14 +170,6 @@ func TestRunDoctor(t *testing.T) {
 		}
 	})
 
-	t.Run("a nil context does not panic", func(t *testing.T) {
-		var out bytes.Buffer
-		//nolint:staticcheck // deliberately passing nil to prove it is handled
-		if err := runDoctor(nil, &out, healthy()); err != nil {
-			t.Fatalf("runDoctor: %v", err)
-		}
-	})
-
 	t.Run("an under-provisioned Docker VM is a blocking problem", func(t *testing.T) {
 		var out bytes.Buffer
 		// 2 CPU / 2 GiB - the default colima VM, which cannot hold the lab.

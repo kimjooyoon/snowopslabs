@@ -40,10 +40,6 @@ as a gate in a script.`,
 // runDoctor runs the checks and prints the results to out. It takes a runner
 // so tests can use a fake.
 func runDoctor(ctx context.Context, out io.Writer, runner toolchain.Runner) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	results, err := toolchain.NewPreflight(runner).Check(ctx)
 	if err != nil {
 		return err
