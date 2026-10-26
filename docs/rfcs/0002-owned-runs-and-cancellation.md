@@ -1,4 +1,4 @@
-# RFC 0002: Owned runs and cancellation requests
+# RFC 0002: Owner-aware run recovery
 
 **Status:** Draft, not implemented or accepted
 **Author:** @kimjooyoon
@@ -6,199 +6,218 @@
 
 ## Summary
 
-**Planned:** give each engine an OS-held owner lock, preserve another live
-engine's runs, and separate cancellation requests from execution completion.
-Keep uncertain interrupted work reserved until machine-verifiable evidence
-establishes that execution has stopped. This proposal does not supply an
-execution witness for running work after its owner is killed.
+**Planned:** give each engine an owner ID and a file lock. Starting another
+engine must leave a live owner's runs alone. If an engine dies, keep interrupted
+running work visible and let the operator explicitly release its lock key.
+
+Ship this recovery change first. Add stored cancellation requests in a separate
+phase. Recovery can land before the
+[traffic operation migration](https://github.com/sagar2395/snowopslabs/issues/13),
+without claiming to fix the separate remote-cancellation problem.
 
 ## Motivation
 
-The [traffic operation migration](https://github.com/sagar2395/snowopslabs/issues/13)
-needs multiple CLI invocations to share one durable store safely. Two independent
-[reproducers and their raw results](https://gist.github.com/kimjooyoon/209dba6b3ca78c1bfc44aa3f5222c677/0d6986f1dd05df1d26be24dc666cefca92321c97)
-show that adding a service lock is insufficient:
+Two [reproducers and their raw results](https://gist.github.com/kimjooyoon/209dba6b3ca78c1bfc44aa3f5222c677/0d6986f1dd05df1d26be24dc666cefca92321c97)
+show different problems:
 
-- Starting an unlocked status engine marks another live engine's start as
-  cancelled. Startup recovery currently terminalizes every active row.
-- The actual CLI cancel command marks a run cancelled before its execution
-  returns. A same-key operation then executes during the first operation's
-  deliberately held cleanup. Without cancellation, the control rejects it.
+- Starting an unlocked status engine marks another live engine's run cancelled.
+  Startup recovery currently cancels every queued or running row.
+- A CLI cancel request marks a run cancelled before its execution returns.
+  Another operation on the same key can then start while cleanup is still running.
 
-The second test uses an in-process operation and controlled cleanup channels.
-It establishes the engine/CLI completion gap, not Kubernetes process cleanup.
-Both tests use temporary SQLite and a fake toolchain. Neither uses a cluster.
+Both tests use temporary SQLite and a fake toolchain, without a cluster. The
+cancellation test holds an in-process cleanup open. It does not test Kubernetes
+process cleanup. These observations remain separate from the proposed changes.
 
-## Design
+## Phase 1: Preserve live owners and recover interrupted work
 
-### Scope and ownership
+### Register each engine
 
-Support cooperating engines on one host, using local storage and one canonical
-SQLite path and owner directory. Remote filesystems, hard-link aliases of the
-database, external replacement/deletion of referenced owner files, and mixed
-old/new writers are outside this protocol. A lock at a replaced pathname cannot
-establish anything about the original inode. Unsupported or
-uncertain owner probes must preserve reservations, not guess that an owner died.
+Support engines on one host, using local storage and one canonical database path
+and owner directory. Remote filesystems, hard-link aliases, and external deletion
+or replacement of referenced owner files are unsupported.
 
-Each engine creates a fresh random owner ID and an exclusive owner file beside
-the canonical database. Acquire a nonblocking exclusive `flock` before accepting
-work. Hold the descriptor until every worker has returned and persisted its
-completion. A shutdown timeout must not release it or close the store beneath
-workers that are still finishing. Owner IDs are never reused.
+Each engine creates a fresh random owner ID and an owner file beside the database.
+It takes an exclusive nonblocking `flock` before accepting work. Keep that file
+open and locked until all workers have returned and saved their results. If
+shutdown times out, keep the lock and store open while workers finish.
 
-The descriptor is close-on-exec and is not passed to children. Referenced owner
-files are never replaced or unlinked. Their directory is writable only by the
-local operator. Probe an existing owner file without creating a missing one.
-A busy lock is evidence of an active protocol participant. Acquiring the lock
-permits owner-scoped recovery; it is not evidence that its subprocesses stopped.
+Do not pass the descriptor to child processes. Never reuse an owner ID, replace a
+referenced file, or create a missing file during a probe. A busy lock means another
+engine may still own the run. Acquiring its lock allows recovery of that owner's
+rows. It does not prove that child processes have stopped.
 
-These are advisory cooperation locks, not authentication. The
-[macOS manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/flock.2.html)
-and [Linux manual](https://man7.org/linux/man-pages/man2/flock.2.html) describe
-nonblocking locks and shared references through duplicated descriptors. Keep the
-adapter cgo-free and test it on macOS and Linux, including WSL2 in its Linux home.
+These are cooperation locks, not authentication. Use a cgo-free adapter on macOS
+and Linux, including WSL2 in its Linux home. The
+[macOS](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/flock.2.html)
+and [Linux](https://man7.org/linux/man-pages/man2/flock.2.html) manuals describe the
+nonblocking operation and how duplicated descriptors share a lock.
 
-### Durable fields and writes
+### Record ownership and recovery
 
-Add these internal store fields:
+Add these internal store fields in phase 1:
 
 | Field | Meaning |
 |---|---|
-| `owner_id` | Immutable engine identity; nullable only for migrated legacy rows |
-| `cancel_requested_at` | Nullable cancellation intent, not completion |
-| `recovery_state` | `none` or `required`, default `none` |
-| `recovery_reason` | Stable reason for a required recovery, empty otherwise |
+| `owner_id` | Engine identity; empty only for migrated legacy rows |
+| `recovery_state` | `none`, `required`, or `released` |
+| `recovery_reason` | Why recovery was required or the key was released |
+| `released_at` | Time of an explicit operator release; empty otherwise |
+| `released_by` | Local operator UID and available user name; empty otherwise |
 
-Keep the existing six lifecycle status values. With `recovery_state=required`,
-`queued` or `running` records the last observed phase, not current liveness.
-The existing atomic guarded `CreateRun` insertion and queued/running lock
-predicate remain the reservation mechanism. Do not replace them with a
-process-local mutex or a separate check followed by an unguarded insertion.
+Keep the existing lifecycle statuses and atomic `CreateRun` insertion. Queued and
+running rows still reserve their lock keys. With recovery required, that status
+records the last saved phase; it does not say the operation is currently running.
 
-New submissions require the submitting owner, bound to the engine rather than
-accepted from a client request. Ordinary start and completion
-writes must match that owner and `recovery_state=none`. Start additionally
-requires no pending cancellation. Owner-scoped recovery uses separate guarded
-writes while holding the probed owner's exclusive file lock. Recheck owner,
-phase and recovery state in the same transaction that changes the record.
-Only established execution completion releases a running reservation.
+Bind new runs to their submitting engine. Worker start and completion writes must
+match its owner ID and `recovery_state=none`. Recovery rechecks the owner, status,
+and recovery state in the same transaction that changes the row. It holds the
+owner file lock through that transaction. Do not replace atomic insertion with a
+separate conflict check or a process-local mutex.
 
-### Startup recovery
+The existing remote-cancel path remains unchanged in phase 1. It can still mark a
+run cancelled before cleanup returns. The owner guards above do not fix that
+path; phase 2 does.
 
-Inspect owners of active records without cancelling unrelated work. Hold a
-successfully acquired owner lock through its recovery transaction.
+### Recover at startup
 
-| Owner evidence | Last phase | Result |
+Inspect only owners of active rows. A successful owner-lock probe applies only
+to that owner's rows.
+
+| Owner check | Last saved phase | Result |
 |---|---|---|
-| Owner lock busy | queued or running | Preserve record, reservation and logs |
-| Existing owner lock acquired | queued | Cancel without executing; release reservation |
-| Existing owner lock acquired | running | Set recovery required; retain reservation and partial logs |
-| Legacy ownership during the offline upgrade | queued or running | Set recovery required; retain reservation and logs |
-| Missing, inaccessible or uncertain owner probe | queued or running | Preserve phase, recovery state and owner-write eligibility; report the probe error |
-| Terminal record | any | Leave unchanged |
+| Lock busy | queued or running | Leave the row, key, and logs unchanged |
+| Existing lock acquired | queued | Cancel without executing; release the key |
+| Existing lock acquired | running | Mark recovery required; keep the key and logs |
+| Legacy row during offline upgrade | queued or running | Mark recovery required; keep the key and logs |
+| Missing file or failed probe | queued or running | Report the error; leave the row and owner's write access unchanged |
+| Finished row | any | Leave unchanged |
 
-A queued-to-running transition must precede every script or in-process action.
-That is what makes dead-owner queued recovery safe. A crash after that
-transition but before launching is conservatively treated as unverified running
-work. Repeated recovery is idempotent. An uncertain owner probe preserves its
-reservations and may still belong to a live engine. It cannot revoke that
-owner's ability to finish normally. Report the failed probe without changing
-its recovery state. Unrelated keys and unlocked probes continue to run.
+Save the transition to running before any script or in-process action starts.
+This makes recovery of a dead owner's queued work safe. A crash just after that
+transition still needs recovery, even if no script started. Repeated startup
+recovery must give the same result. Unrelated keys and unlocked probes can proceed.
 
-An exited owner does not establish that its children exited. The current runner
-keeps process-group identity and its TERM/KILL goroutine only in memory. This
-proposal therefore provides no automatic release of interrupted running work.
-Do not signal a saved PID or PGID based on age or identifier equality, and do not
-release the reservation on a human assertion that cleanup happened. An accepted
-supervisor or OS execution-witness protocol is required before such a release
-operation exists. Missing evidence remains visible and keeps the reservation.
+### Release a key explicitly
 
-### Cancellation and completion
+**Planned CLI:** `labctl runs recover <id> --force` releases a run whose recovery
+state is `required`. Without `--force`, show the run, its key, the warning below,
+and how to retry. Do not change the row.
 
-All CLI, API and in-engine cancellation entry points persist idempotent intent.
-For a running operation, a request keeps its status, owner and reservation. The
-executing owner observes the request, cancels its context and lets the runner
-finish its TERM/KILL and cleanup path. Only after execution returns does that
-owner record terminal completion. A local owner can signal its context at once
-as well as persisting intent; a remote requester cannot finish its record.
+Warn before a forced release: "The operation may still be running. Releasing this
+key allows another operation on the same key. Check the lab before continuing."
+This is an operator override, not a check that execution or cleanup finished.
 
-Queued cancellation must prevent execution through the guarded start transition.
-The owner acknowledges a queued request without launching work. A cancelling
-request must not cause an elapsed-time lease to expire or release the key.
+For a run with an owner ID, acquire that owner's lock and hold it through the
+store transaction. Refuse a busy lock even with `--force`. If the file is missing
+or the probe fails, report the error and keep the key; the operator must repair
+the owner-file problem first. Migrated rows without an owner ID can use the same
+command after the offline upgrade. They have no owner file to probe.
 
-The CLI says `Cancellation requested`, rather than `cancelled`, until completion
-is recorded. Existing terminal-run errors remain errors. Requests against work
-requiring recovery report that termination is unverified and retain its key.
+In one transaction, recheck that recovery is still required, mark the run
+cancelled, set `recovery_state=released` and `recovery_reason=forced_release`, and
+record the release time and local operator UID and available user name. Keep the run ID, former
+owner ID, and partial logs. If the audit fields cannot be saved, do not release
+the key. Two concurrent recoveries must not release or record the same run twice.
+A repeated command reports the existing release without replacing its audit data.
 
-### CLI and API compatibility
+The command reports: "The key was released. The operation may still be running."
+It does not signal a saved PID or process-group ID. Released rows cannot later be
+changed by an old owner's completion write. A surviving child can still affect
+the lab; the warning and retained audit record make that limitation explicit.
 
-Expose optional `recoveryState` and `recoveryReason` fields in run summaries,
-details and log responses. The CLI and UI must display `Recovery required:
-execution termination unverified`, rather than an advancing running duration.
-Disable ordinary cancellation and active streaming cues for that state. A CLI
-follower drains saved logs and returns a recovery-required error; the log API's
-existing terminal `done` meaning remains unchanged. Recovery state stops a
-follower separately from terminal completion.
+### Show recovery in clients
 
-Derived platform/lab state must not interpret a recovery-required reservation as
-an active install. Keep the existing status filter vocabulary. No public Go SDK
-run type changes are needed, but JSON clients that ignore the new fields can
-still display stale activity. Structural compatibility is not full behavioral
-compatibility.
+Add optional recovery and release fields to run summaries, details, and log
+responses. Display `Recovery required` with the planned recovery command for a
+held key. After a forced release, display `Key released by operator`, including
+who released it, when, and the warning that work may still be running.
 
-## Alternatives considered
+A follower drains saved logs, then returns a recovery-required error instead of
+waiting forever. Keep the log API's existing completion signal unchanged. Do not
+show recovery-required work as an advancing install or offer ordinary cancellation
+as a way to release its key. Clients that ignore the new fields may show only the
+old lifecycle status. Document that limitation when implementing the API changes.
 
-| Alternative | Reason to reject or defer |
+### Upgrade offline
+
+Stop every old labctl process, including servers and workers. Upgrade all local
+entry points, back up the database, then migrate before restarting. Mixed-version
+and online upgrades are unsupported.
+
+New engines take a shared upgrade lock before opening the store and keep it for
+the store's lifetime. Migration tries that lock exclusively without waiting and
+refuses if it is busy. It also probes the locks for recorded nonempty owner IDs
+and refuses if any is busy, missing, or unreadable. Ownerless legacy rows have no
+file to probe. Keep the acquired locks until the migration transaction finishes.
+Active legacy rows become recovery required and can then use the explicit recovery
+command. Do not discard their keys or logs during migration.
+
+The first upgrade cannot detect old processes that never used these locks.
+Stopping those processes is an operator prerequisite, not something a new schema
+field or lock can prove. This proposal does not support leaving an old binary
+running against the upgraded database. The migration guide must state that limit.
+
+### Acceptance for phase 1
+
+Implement and test this phase independently of stored cancellation requests:
+
+1. Starting a second engine preserves a live owner's run and key. A paused owner
+   is still live; a failed probe must not change its row or block its own writes.
+2. A dead owner's queued work is cancelled without execution. Interrupted running
+   work keeps its key and logs, including when a child process survives.
+3. Recovery without `--force` changes nothing. A forced release records its actor,
+   time, reason, and former owner, and allows a new same-key run. It does not claim
+   that the surviving child stopped. Busy-owner and failed-probe cases retain the key.
+4. Concurrent and repeated recovery records one release. A failed audit write keeps
+   the key. An old completion cannot overwrite the released result.
+5. Separate connections competing for the same key have one holder. Disjoint keys
+   and unlocked probes still proceed.
+6. Shutdown timeouts retain the store and owner lock until workers finish. Children
+   do not inherit the descriptor. Referenced or busy owner files are never removed.
+7. Migration refuses known busy or failed lock checks. Migrated ownerless rows keep
+   their logs and have a supported explicit release path after the offline upgrade.
+8. CLI, API, and follower tests show both recovery required and operator release.
+   The remote-cancellation reproducer remains a known limitation until phase 2.
+
+Use local subprocesses for file-lock and surviving-child cases on macOS and Linux.
+The documentation change does not claim these implementation tests have passed.
+
+## Phase 2: Store cancellation requests
+
+**Planned separately:** add `cancel_requested_at` and change all cancellation entry
+points to save an idempotent request. A running operation keeps its status, owner,
+and key while its owner cancels the context and waits for execution to return.
+Only then does normal completion release that key. The explicit operator recovery
+command remains the separate override for interrupted work.
+
+A guarded queued-to-running transition checks for a pending request. The owner
+acknowledges a queued cancellation without launching work. The CLI says
+`Cancellation requested` until completion is saved. These fields, pickup checks,
+and wording are not part of phase 1.
+
+Phase 2 must make the remote-cancellation reproducer pass. Test requests arriving
+at pickup, concurrent cancellation and normal exit, and retained keys during
+cleanup. Choose the polling interval in that implementation. Do not delay phase 1
+or describe its recovery change as satisfying these cancellation tests.
+
+## Alternatives and future work
+
+| Choice | Reason |
 |---|---|
-| Recover all active rows at every startup | Cancels a live owner and clears its reservation |
-| One global engine lock | Prevents independent or unlocked operations from coexisting |
-| PID alone or an expiring heartbeat | Reuse or a paused live owner can produce a false death decision |
-| Terminalize a cancellation request | Releases the key while cleanup can still be running |
-| New `recovery_required` lifecycle status | Changes SQL checks, API status filters and the closed client status vocabulary |
-| Human acknowledgment of cleanup | Does not establish execution quiescence |
-| Local supervisor for every run | Can improve crash cleanup, but needs a separately accepted execution-witness design and its own failure handling |
+| Cancel every active row at startup | Cancels work owned by a live engine |
+| Hold one exclusive lock for every engine | Prevents independent operations from coexisting |
+| Use a PID or elapsed heartbeat alone | A reused PID or paused owner can look like an exited owner |
+| Keep interrupted keys forever | Leaves a local lab stuck without a supported recovery command |
+| Release interrupted keys automatically | The owner may have left a child process running |
+| Store cancellation requests in phase 1 | Makes the recovery fix harder to review and ship on its own |
 
-## Impact
+A later supervisor could establish when surviving execution has stopped and allow
+automatic release. That is future work, not a condition for accepting phase 1 or
+using explicit operator recovery. No daemon or remote service is required here.
 
-An offline schema upgrade must stop older engine processes and prevent older
-writers from reopening the migrated database. Active legacy rows retain their
-reservations because they have no owner witness. Do not claim that a nullable
-owner field alone fences an already-open old writer. Establishing this upgrade
-boundary is an implementation acceptance condition.
-
-Owner files add one small file per engine. Existing retention can prune an owner
-file only after acquiring its exclusive lock and establishing that no run row
-references it. Never reuse a retired ID or delete a busy or referenced file.
-No heartbeat service, daemon, remote backend or paid infrastructure is proposed.
-
-After acceptance, update the architecture's cancellation and recovery contract,
-the lock ADR, run CLI/API reference and the cancellation runbook. In particular,
-replace the runbook's unconditional interrupted-lock-release assertion with
-phase-aware expectations. The traffic wrapper remains a separate implementation;
-this draft does not complete its cross-terminal acceptance.
-
-Required implementation tests, with real local subprocesses where relevant:
-
-1. The two-engine status reproducer preserves the live start and its key.
-2. The remote-cancel reproducer refuses a same-key operation until cleanup returns.
-3. Simultaneous same-key submissions through separate connections have one holder;
-   disjoint keys and unlocked probes proceed.
-4. A paused live owner remains reserved; failed probes do not imply owner death.
-5. A dead owner's queued work recovers without execution. Interrupted running work
-   with a surviving child retains its reservation and is shown as recovery required.
-6. Cancellation arriving at worker pickup prevents launch. Concurrent cancellation
-   and natural exit produce one terminal result, with the key held until return.
-7. Shutdown timeout retains owner/store lifetimes until workers finish. Test that
-   descriptors are not inherited and protocol operations never replace or unlink
-   busy or referenced owner files; pruning must preserve those witnesses.
-8. Legacy rows, an already-open old writer and repeated recovery cannot release an
-   uncertain reservation. Client/follower tests exercise the additive recovery fields.
-
-## Open questions
-
-- Accept additive recovery metadata, or require a new lifecycle status despite
-  its wider client and schema impact?
-- How will the offline upgrade gate mechanically exclude already-open old writers?
-- Which supervisor or OS witness can establish termination of ownerless execution?
-  Until that protocol is accepted and tested, running-orphan release stays unsupported.
-- Should queued requests be acknowledged by an owner-wide poll or at worker pickup?
+Owner files add one small file per engine. Retention may remove a file only after
+acquiring its lock and confirming that no row references its owner ID. Never reuse
+that ID. During implementation, update the architecture, locking ADR, CLI/API
+reference, and cancellation runbook in the same change. In particular, explain
+when recovery holds a key and when the operator may release it.
