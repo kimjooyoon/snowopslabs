@@ -86,7 +86,7 @@ func (e *Engine) execute(id string) {
 	}()
 
 	startedAt := e.now()
-	if err := e.store.StartRun(ctx, id, startedAt); err != nil {
+	if err := e.store.StartOwnedRun(ctx, id, e.owner.ID, startedAt); err != nil {
 		// A concurrent Cancel already moved it out of the queued state.
 		return
 	}
@@ -232,7 +232,13 @@ func classify(runCtx, timeoutCtx context.Context, timeout time.Duration, res too
 func (e *Engine) finish(ctx context.Context, id, kind string, status store.Status, exitCode *int, message string, elapsed time.Duration) {
 	// An error here means another path already recorded a terminal state for
 	// this run, and that record stands.
-	_ = e.store.FinishRun(ctx, id, status, exitCode, message, e.now(), elapsed)
+	if err := e.store.FinishOwnedRun(ctx, id, e.owner.ID, status, exitCode, message, e.now(), elapsed); err != nil {
+		rec, readErr := e.store.GetRun(ctx, id)
+		if readErr != nil || rec.RecoveryState != store.RecoveryNone {
+			return
+		}
+		status = rec.Status
+	}
 	e.subs.publish(Event{Type: EventStatus, RunID: id, Status: status})
 	if e.metrics != nil {
 		e.metrics.RunFinished(kind, string(status), elapsed)

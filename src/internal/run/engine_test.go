@@ -654,8 +654,7 @@ func TestParseStepMarker(t *testing.T) {
 	}
 }
 
-// TestRecoveryOnStart simulates labctl dying mid-run: after a restart the run
-// shows as cancelled, its partial log is intact, and its lock is released.
+// TestRecoveryOnStart keeps interrupted legacy work reserved for operator recovery.
 func TestRecoveryOnStart(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -708,10 +707,10 @@ func TestRecoveryOnStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRun: %v", err)
 	}
-	if rec.Status != store.StatusCancelled {
-		t.Errorf("status = %q, want cancelled", rec.Status)
+	if rec.Status != store.StatusRunning || rec.RecoveryState != store.RecoveryRequired {
+		t.Errorf("status/recovery = %q/%q; want running/required", rec.Status, rec.RecoveryState)
 	}
-	if !strings.Contains(rec.Error, "interrupted") {
+	if !strings.Contains(rec.Error, "labctl runs recover") {
 		t.Errorf("error = %q, want it to explain the interruption", rec.Error)
 	}
 
@@ -726,16 +725,21 @@ func TestRecoveryOnStart(t *testing.T) {
 	if !strings.Contains(text.String(), "got this far") {
 		t.Error("the partial log was lost across the restart")
 	}
-	if !strings.Contains(text.String(), "interrupted") {
+	if !strings.Contains(text.String(), "Recovery required") {
 		t.Errorf("the transcript does not explain the interruption:\n%s", text.String())
 	}
 
 	steps, _ := st2.ListSteps(ctx, "orphan")
-	if len(steps) != 1 || steps[0].Status != store.StepFailed {
-		t.Errorf("the open step was not closed: %+v", steps)
+	if len(steps) != 1 || steps[0].Status != store.StepRunning {
+		t.Errorf("interrupted step history changed: %+v", steps)
 	}
 
-	// The lock must be free, or nothing can ever run against that lab again.
+	if _, err := engine.Submit(ctx, Spec{Kind: "test", LockKey: "lab:default", Script: "x.sh"}); err == nil {
+		t.Error("interrupted work did not reserve its key")
+	}
+	if _, err := st2.ReleaseRecoveredRun(ctx, "orphan", "uid:501"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := engine.Submit(ctx, Spec{Kind: "test", LockKey: "lab:default", Script: "x.sh"}); err != nil {
 		t.Errorf("the recovered run's lock was not released: %v", err)
 	}

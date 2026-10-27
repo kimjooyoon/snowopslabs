@@ -19,9 +19,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sagar2395/snowopslabs/internal/config"
+	"github.com/sagar2395/snowopslabs/internal/runowner"
 	_ "modernc.org/sqlite" // pure-Go driver, registered as "sqlite"
 )
 
@@ -43,9 +45,15 @@ func DefaultPath() (string, error) {
 
 // Store is an open database with all migrations applied.
 type Store struct {
-	db   *sql.DB
-	path string
-	now  func() time.Time // injectable for tests
+	db             *sql.DB
+	path           string
+	now            func() time.Time // injectable for tests
+	upgrade        *runowner.Lock
+	lifetimeMu     sync.Mutex
+	retained       int
+	closeRequested bool
+	closed         bool
+	closeErr       error
 }
 
 // Option customises Open.
@@ -71,6 +79,10 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 			return nil, fmt.Errorf("creating %s: %w", dir, err)
 		}
 	}
+	upgrade, err := runowner.Upgrade(ctx, path, false)
+	if err != nil {
+		return nil, fmt.Errorf("opening store upgrade lock: %w", err)
+	}
 
 	dsn := path + "?_pragma=busy_timeout(5000)" +
 		"&_pragma=journal_mode(WAL)" +
@@ -79,7 +91,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("opening %s: %w", path, err)
+		return nil, errors.Join(fmt.Errorf("opening %s: %w", path, err), upgrade.Close())
 	}
 
 	// SQLite serialises writes anyway; one connection avoids lock contention
@@ -88,28 +100,64 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	db.SetConnMaxLifetime(0)
 
 	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("connecting to %s: %w", path, err)
+		return nil, errors.Join(fmt.Errorf("connecting to %s: %w", path, err), db.Close(), upgrade.Close())
 	}
 
-	s := &Store{db: db, path: path, now: time.Now}
+	s := &Store{db: db, path: path, now: time.Now, upgrade: upgrade}
 	for _, opt := range opts {
 		opt(s)
 	}
 
 	if err := s.migrate(ctx); err != nil {
-		_ = db.Close()
-		return nil, err
+		return nil, errors.Join(err, s.Close())
 	}
 	return s, nil
 }
 
-// Close releases the database handle.
+// Close releases the database after retained workers return and save their results.
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-	return s.db.Close()
+	s.lifetimeMu.Lock()
+	defer s.lifetimeMu.Unlock()
+	s.closeRequested = true
+	if s.retained == 0 {
+		s.closeResources()
+	}
+	return s.closeErr
+}
+
+// Retain keeps the database and upgrade lock open until its release is called.
+// A closing store refuses new borrowers while existing workers finish.
+func (s *Store) Retain() (func() error, error) {
+	s.lifetimeMu.Lock()
+	defer s.lifetimeMu.Unlock()
+	if s.closeRequested {
+		return nil, errors.New("store is closing; wait for its workers to finish")
+	}
+	s.retained++
+	var once sync.Once
+	var releaseErr error
+	return func() error {
+		once.Do(func() {
+			s.lifetimeMu.Lock()
+			defer s.lifetimeMu.Unlock()
+			s.retained--
+			if s.closeRequested && s.retained == 0 {
+				s.closeResources()
+			}
+			releaseErr = s.closeErr
+		})
+		return releaseErr
+	}, nil
+}
+
+func (s *Store) closeResources() {
+	if !s.closed {
+		s.closeErr = errors.Join(s.db.Close(), s.upgrade.Close())
+		s.closed = true
+	}
 }
 
 // Path returns the database file location.
@@ -189,15 +237,6 @@ func currentVersion(ctx context.Context, db *sql.DB) (int, error) {
 // migrate applies every migration newer than the recorded version, each in its
 // own transaction, so a failure leaves the database at a known version.
 func (s *Store) migrate(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version    INTEGER PRIMARY KEY,
-			name       TEXT    NOT NULL,
-			applied_at INTEGER NOT NULL
-		)`); err != nil {
-		return fmt.Errorf("creating schema_migrations: %w", err)
-	}
-
 	migrations, err := loadMigrations()
 	if err != nil {
 		return err
@@ -219,6 +258,39 @@ func (s *Store) migrate(ctx context.Context) error {
 			"upgrade labctl, or point SNOWOPS_HOME at a different directory",
 			ErrSchemaTooNew, s.path, applied, latest)
 	}
+	if applied == latest {
+		return nil
+	}
+	if err := s.upgrade.Close(); err != nil {
+		return fmt.Errorf("releasing store lock for migration: %w", err)
+	}
+	exclusive, err := runowner.Upgrade(ctx, s.path, true)
+	if err != nil {
+		return fmt.Errorf("migration requires an offline store; stop all labctl processes and retry: %w", err)
+	}
+	s.upgrade = exclusive
+	owners, err := s.lockMigrationOwners(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, lock := range owners {
+			_ = lock.Close()
+		}
+	}()
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("creating schema_migrations: %w", err)
+	}
+	applied, err = currentVersion(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	if applied > latest {
+		return fmt.Errorf("%w: upgrade labctl before reopening this store", ErrSchemaTooNew)
+	}
 
 	for _, m := range migrations {
 		if m.version <= applied {
@@ -228,7 +300,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return s.upgrade.Shared(ctx)
 }
 
 func (s *Store) applyMigration(ctx context.Context, m migration) error {

@@ -39,5 +39,28 @@ concurrently, bounded by a worker pool.
 - Lock keys must be chosen carefully. Too coarse serialises unnecessarily, too
   fine allows real races. The key for each run kind is declared in one table in
   `internal/run` and reviewed as part of any new run kind.
-- Locks live in memory and are rebuilt at startup from `runs` in a non-terminal
-  state, which are marked `cancelled` on recovery since their processes are gone.
+- Queued and running rows reserve keys through the store's atomic insertion.
+  Starting a second engine preserves work whose owner file is locked. A dead
+  owner's queued work is cancelled before execution; interrupted running work
+  keeps its key and requires an explicit operator release.
+
+## Owner-aware recovery
+
+Each engine holds a fresh random owner's nonblocking local file lock until all
+workers return and persist their results. A shutdown timeout retains both that
+lock and the store. Worker start and completion require the same owner and no
+recovery override. Children do not inherit the descriptor; acquiring a dead
+owner's lock does not establish that its children stopped.
+
+`labctl runs recover <id> --force` holds the recorded owner's lock through a
+transaction that releases the key and records the former owner, local operator,
+time and reason. Failed audit writes retain the key. Busy or failed lock probes
+refuse recovery. Repeated releases preserve the original audit. Referenced owner
+files are never removed or recreated during a probe.
+
+The scope is local storage and one canonical database path on macOS or Linux,
+including WSL2 in its Linux home. Store-lifetime shared upgrade locks and
+nonblocking exclusive migration locks require an offline upgrade. Old binaries
+without those locks must be stopped by the operator. See the
+[accepted recovery design](../rfcs/0002-owned-runs-and-cancellation.md) for the
+surviving-child limitation and the separately planned remote-cancellation fix.

@@ -138,6 +138,11 @@ Every run gets a `context.Context`. Cancellation is not best-effort:
 Server shutdown cancels all in-flight runs the same way and waits for them,
 rather than leaving orphaned `helm` processes behind.
 
+The ordering above describes local engine cancellation. The separate remote
+cancel path still saves a terminal status before execution and cleanup return.
+Stored cancellation requests remain planned; owner-aware recovery does not
+resolve that ordering.
+
 ### 3.3 Concurrency and locking
 
 Runs declare a lock key, typically `lab:<name>` or `lab:<name>/ns:<namespace>`.
@@ -147,6 +152,22 @@ lock, not silently queued, because a user who fires `platform up` twice wants
 to be told, not to wait five minutes for a duplicate.
 
 Runs with disjoint lock keys execute concurrently, bounded by a worker pool.
+
+Queued and running rows reserve their keys atomically in SQLite. Each engine
+has a fresh owner ID and a nonblocking local file lock held until its workers
+finish saving results. Starting another engine leaves a busy owner's work
+unchanged. A dead owner's queued work is cancelled before execution; interrupted
+running work retains its key and logs with `recovery_state=required`. The saved
+status and steps record the last known phase, not continuing progress.
+
+`labctl runs recover <id> --force` releases an interrupted key explicitly. It
+warns that work may still be running, refuses a busy or failed owner probe, and
+records the operator, time, reason and former owner in the same transaction as
+release. Old owner completion cannot overwrite a released result. A shutdown
+timeout keeps the store and owner lock open until workers finish. Owner file
+locks do not prove that surviving children stopped, and ordinary remote
+cancellation can still release a key before cleanup returns. See
+[the recovery design](../rfcs/0002-owned-runs-and-cancellation.md) for that limit.
 
 ### 3.4 Durable, replayable logs
 
@@ -178,11 +199,20 @@ Database lives at `~/.snowops/snowops.db` (override with
 applied on open; a newer schema than the binary understands is a hard, clear
 error rather than a corruption risk.
 
+The store takes a shared upgrade lock before opening SQLite and holds it for
+its lifetime. A pending migration requires the nonblocking exclusive lock and
+successful probes of recorded active owners. Upgrade offline: stop all old
+processes, back up the database and upgrade every entry point before migrating.
+Processes from before this locking protocol cannot be detected by it. Active
+legacy rows retain their keys and logs and require explicit operator recovery.
+Use one canonical path on local macOS or Linux storage, including WSL2's Linux
+home; remote filesystems and hard-link aliases are unsupported.
+
 Core tables:
 
 | Table | Holds |
 |---|---|
-| `runs` | id, kind, target, status, lock key, actor, timings, exit code, error |
+| `runs` | id, kind, target, status, lock key, actor, timings, exit code, error, owner, recovery state and release audit |
 | `run_logs` | per-run ordered output lines (the replay source) |
 | `run_steps` | parsed step timeline |
 | `labs` | lab identity, runtime profile, lifecycle state |

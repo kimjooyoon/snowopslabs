@@ -1,12 +1,12 @@
 # RFC 0002: Owner-aware run recovery
 
-**Status:** Draft, not implemented or accepted
+**Status:** Accepted design; phase 1 implemented, phase 2 planned
 **Author:** @kimjooyoon
 **Date:** 2026-10-25
 
 ## Summary
 
-**Planned:** give each engine an owner ID and a file lock. Starting another
+Each engine has an owner ID and a file lock. Starting another
 engine must leave a live owner's runs alone. If an engine dies, keep interrupted
 running work visible and let the operator explicitly release its lock key.
 
@@ -100,7 +100,7 @@ recovery must give the same result. Unrelated keys and unlocked probes can proce
 
 ### Release a key explicitly
 
-**Planned CLI:** `labctl runs recover <id> --force` releases a run whose recovery
+**CLI:** `labctl runs recover <id> --force` releases a run whose recovery
 state is `required`. Without `--force`, show the run, its key, the warning below,
 and how to retry. Do not change the row.
 
@@ -129,7 +129,7 @@ the lab; the warning and retained audit record make that limitation explicit.
 ### Show recovery in clients
 
 Add optional recovery and release fields to run summaries, details, and log
-responses. Display `Recovery required` with the planned recovery command for a
+responses. Display `Recovery required` with the recovery command for a
 held key. After a forced release, display `Key released by operator`, including
 who released it, when, and the warning that work may still be running.
 
@@ -181,7 +181,8 @@ Implement and test this phase independently of stored cancellation requests:
    The remote-cancellation reproducer remains a known limitation until phase 2.
 
 Use local subprocesses for file-lock and surviving-child cases on macOS and Linux.
-The documentation change does not claim these implementation tests have passed.
+A local pass on one platform does not establish the result on the other; keep
+both native checks in the implementation's validation evidence.
 
 ## Phase 2: Store cancellation requests
 

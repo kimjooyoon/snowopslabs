@@ -1,0 +1,28 @@
+$ labctl runs recover interrupted
+Run interrupted: Recovery required
+Key: lab
+The operation may still be running. Releasing this key allows another operation on the same key. Check the lab before continuing.
+Retry with: labctl runs recover interrupted --force
+[stderr]
+Error: run requires operator recovery
+[exit 1]
+
+$ labctl runs recover interrupted --force
+Key released by operator <operator> at <time>.
+The key was released. The operation may still be running.
+[stderr]
+The operation may still be running. Releasing this key allows another operation on the same key. Check the lab before continuing.
+
+$ labctl runs recover interrupted --force
+Key released by operator <operator> at <time>.
+The key was released. The operation may still be running.
+
+$ labctl runs logs interrupted --follow
+Run interrupted - lab.up (cancelled)
+
+saved output
+* Recovery required: check the lab, then use labctl runs recover interrupted --force
+* Key released by operator. The operation may still be running. Released by <operator>
+
+Key released by operator <operator> at <time>.
+The key was released. The operation may still be running.

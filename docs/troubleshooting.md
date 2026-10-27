@@ -27,6 +27,11 @@ page collects them by symptom. `labctl doctor` checks your machine, and
 
 | Symptom | Cause and fix |
 |---|---|
+| `Recovery required` or a held key after labctl exited | Read `labctl runs logs <run-id>` and check the lab. Work or a child process may still be running. `labctl runs recover <run-id>` previews the override; add `--force` only when you intend to permit another operation on the same key. Ordinary cancellation does not release this key. |
+| Recovery says an owner lock is busy | The owner may still be executing. Let it finish or stop it, then inspect the lab before retrying recovery. `--force` does not bypass a live owner. |
+| Recovery cannot check an owner file | Keep the key reserved and repair the owner-file problem. Do not create, replace or delete referenced files to bypass the check. Use the canonical database and owner directory on local storage. |
+| Migration requires an offline store | Stop every labctl server, CLI and worker, back up the database, upgrade all entry points, then retry. Old binaries without upgrade locks must also be stopped; the new lock cannot detect them. |
+| `Key released by operator` | The recorded actor explicitly released the key. The operation may still be running. Read the release audit and check the lab before starting replacement work. |
 | The dashboard or `labctl status` says the cluster is **unreachable** | Docker or colima is stopped, usually after a reboot, or out of memory. Run `labctl init`; it keeps your apps and scenarios. |
 | A node stays `NotReady` after a restart | `labctl init` restarts the cluster and corrects the address Kubernetes records for any node whose container came back with a different IP (the server included), keeping its pods. If it still fails, `labctl reset` rebuilds the lab from scratch. |
 | `Not enough memory for <scenario>` | Run the commands it prints: `labctl scenario down` for a scenario, `labctl platform down` for components only it used or nothing uses. Or resize Docker as printed. [Resources](resources.md) lists what each scenario needs. |

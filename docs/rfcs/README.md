@@ -21,8 +21,9 @@ an issue first.
 
 See [`0000-template.md`](0000-template.md).
 
-## Draft proposals
+## Accepted designs
 
 - [Owner-aware run recovery](0002-owned-runs-and-cancellation.md): preserve live
   owners and provide explicit recovery of interrupted work first; store cancellation
-  requests in a later phase. Not accepted or implemented.
+  requests in a later phase. Phase 1 supplies owner locks, offline migration,
+  explicit operator release and recovery-aware clients. Phase 2 remains planned.

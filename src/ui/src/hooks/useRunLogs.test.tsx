@@ -66,6 +66,25 @@ describe('useRunLogs', () => {
     expect(getRunLogs).toHaveBeenCalledTimes(1)
   })
 
+  it('drains every saved recovery page before stopping with recovery guidance', async () => {
+    const recovery = { recoveryState: 'required', recoveryCommand: 'labctl runs recover run-1 --force' }
+    getRunLogs
+      .mockResolvedValueOnce({ ...page(['one'], 1, false), ...recovery })
+      .mockResolvedValueOnce({ ...page(['two'], 2, false), ...recovery })
+      .mockResolvedValueOnce({ ...page([], 3, false), ...recovery })
+    const { result } = renderHook(() => useRunLogs('run-1'))
+    await waitFor(() => expect(result.current.lines.map(l => l.text)).toEqual(['one']))
+    expect(result.current.error).toBeNull()
+    await act(() => vi.advanceTimersByTimeAsync(1000))
+    expect(result.current.lines.map(l => l.text)).toEqual(['one', 'two'])
+    await act(() => vi.advanceTimersByTimeAsync(1000))
+    expect(result.current.done).toBe(false)
+    expect(result.current.error).toContain('Recovery required')
+    expect(result.current.error).toContain('labctl runs recover run-1 --force')
+    await act(() => vi.advanceTimersByTimeAsync(10000))
+    expect(getRunLogs).toHaveBeenCalledTimes(3)
+  })
+
   it.each([
     ['the server cannot be reached', new Error('Cannot reach the labctl server')],
     ['the server fails', new ApiError('run store unavailable', 503)],

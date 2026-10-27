@@ -54,6 +54,18 @@ var ErrRunNotFound = errors.New("run not found")
 // holds the new run's lock key.
 var ErrLockHeld = errors.New("lock held by an active run")
 
+// ErrRecoveryRequired means only explicit operator recovery can release the key.
+var ErrRecoveryRequired = errors.New("run requires operator recovery")
+
+// RecoveryState distinguishes a held interrupted run from an operator release.
+type RecoveryState string
+
+const (
+	RecoveryNone     RecoveryState = "none"
+	RecoveryRequired RecoveryState = "required"
+	RecoveryReleased RecoveryState = "released"
+)
+
 // HiddenTarget is the target of a run that must not say what it acts on, such
 // as the inject of an incident a learner is to find without being told.
 const HiddenTarget = "(hidden)"
@@ -71,11 +83,16 @@ type Run struct {
 	Timeout  time.Duration
 	QueuedAt time.Time
 
-	StartedAt time.Time
-	EndedAt   time.Time
-	Duration  time.Duration // measured monotonically, not EndedAt-StartedAt
-	ExitCode  *int
-	Error     string
+	StartedAt      time.Time
+	EndedAt        time.Time
+	Duration       time.Duration // measured monotonically, not EndedAt-StartedAt
+	ExitCode       *int
+	Error          string
+	OwnerID        string
+	RecoveryState  RecoveryState
+	RecoveryReason string
+	ReleasedAt     time.Time
+	ReleasedBy     string
 }
 
 // Hidden reports whether the run's output and steps are withheld: they would
@@ -111,12 +128,12 @@ func (s *Store) CreateRun(ctx context.Context, r Run) error {
 	guarded := r.LockKey != "" && (r.Status == StatusQueued || r.Status == StatusRunning)
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO runs (id, kind, target, lock_key, status, actor, argv, script,
-		                  timeout_ms, queued_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		                  timeout_ms, queued_at, owner_id)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		WHERE NOT ? OR NOT EXISTS (
 			SELECT 1 FROM runs WHERE lock_key = ? AND status IN (?, ?))`,
 		r.ID, r.Kind, r.Target, r.LockKey, string(r.Status), r.Actor, string(argv),
-		r.Script, r.Timeout.Milliseconds(), r.QueuedAt.UnixMicro(),
+		r.Script, r.Timeout.Milliseconds(), r.QueuedAt.UnixMicro(), r.OwnerID,
 		guarded, r.LockKey, StatusQueued, StatusRunning)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -135,12 +152,28 @@ func (s *Store) CreateRun(ctx context.Context, r Run) error {
 // StartRun marks a queued run as running. It returns an error, and changes
 // nothing, if the run is no longer queued, so a run can start only once.
 func (s *Store) StartRun(ctx context.Context, id string, at time.Time) error {
+	return s.startRun(ctx, id, "", false, at)
+}
+
+// StartOwnedRun starts queued work only for its owner while recovery is clear.
+func (s *Store) StartOwnedRun(ctx context.Context, id, owner string, at time.Time) error {
+	if owner == "" {
+		return errors.New("starting an owned run requires its owner ID")
+	}
+	return s.startRun(ctx, id, owner, true, at)
+}
+
+func (s *Store) startRun(ctx context.Context, id, owner string, owned bool, at time.Time) error {
 	if at.IsZero() {
 		at = s.now()
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE runs SET status = ?, started_at = ? WHERE id = ? AND status = ?`,
-		StatusRunning, at.UnixMicro(), id, StatusQueued)
+	query := `UPDATE runs SET status = ?, started_at = ? WHERE id = ? AND status = ? AND recovery_state = ?`
+	args := []any{StatusRunning, at.UnixMicro(), id, StatusQueued, RecoveryNone}
+	if owned {
+		query += ` AND owner_id = ?`
+		args = append(args, owner)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("starting run %s: %w", id, err)
 	}
@@ -150,6 +183,18 @@ func (s *Store) StartRun(ctx context.Context, id string, at time.Time) error {
 // FinishRun records a terminal state. exitCode may be nil when the run never
 // produced one (cancelled before exec, or killed).
 func (s *Store) FinishRun(ctx context.Context, id string, status Status, exitCode *int, runErr string, at time.Time, dur time.Duration) error {
+	return s.finishRun(ctx, id, "", false, status, exitCode, runErr, at, dur)
+}
+
+// FinishOwnedRun records completion only for the current unrecovered owner.
+func (s *Store) FinishOwnedRun(ctx context.Context, id, owner string, status Status, exitCode *int, runErr string, at time.Time, dur time.Duration) error {
+	if owner == "" {
+		return errors.New("finishing an owned run requires its owner ID")
+	}
+	return s.finishRun(ctx, id, owner, true, status, exitCode, runErr, at, dur)
+}
+
+func (s *Store) finishRun(ctx context.Context, id, owner string, owned bool, status Status, exitCode *int, runErr string, at time.Time, dur time.Duration) error {
 	if !status.Terminal() {
 		return fmt.Errorf("store: %q is not a terminal status", status)
 	}
@@ -169,12 +214,16 @@ func (s *Store) FinishRun(ctx context.Context, id string, status Status, exitCod
 
 	// Only update a run that is not already terminal, so whichever of a
 	// cancel and a normal exit lands first wins.
-	res, err := s.db.ExecContext(ctx, `
+	query := `
 		UPDATE runs
 		   SET status = ?, exit_code = ?, error = ?, ended_at = ?, duration_us = ?
-		 WHERE id = ? AND status IN (?, ?)`,
-		string(status), code, runErr, at.UnixMicro(), durUs,
-		id, StatusQueued, StatusRunning)
+		 WHERE id = ? AND status IN (?, ?) AND recovery_state = ?`
+	args := []any{string(status), code, runErr, at.UnixMicro(), durUs, id, StatusQueued, StatusRunning, RecoveryNone}
+	if owned {
+		query += ` AND owner_id = ?`
+		args = append(args, owner)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("finishing run %s: %w", id, err)
 	}
@@ -293,48 +342,17 @@ func (s *Store) LastRunForLock(ctx context.Context, lockKey string) (Run, bool, 
 	return r, true, nil
 }
 
-// RecoverOrphanedRuns marks every queued or running run as cancelled and
-// returns their IDs. Call it once at startup: those runs belonged to a labctl
-// process that has exited, and would otherwise hold their locks forever.
+// RecoverOrphanedRuns reconciles active rows only while their owner lock is held.
+// Live owners keep their work; interrupted running work keeps its key.
 func (s *Store) RecoverOrphanedRuns(ctx context.Context, at time.Time) ([]string, error) {
 	if at.IsZero() {
 		at = s.now()
 	}
-
-	var ids []string
-	err := s.tx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT id FROM runs WHERE status IN (?, ?)`, StatusQueued, StatusRunning)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return err
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if len(ids) == 0 {
-			return nil
-		}
-
-		_, err = tx.ExecContext(ctx, `
-			UPDATE runs
-			   SET status = ?, ended_at = ?,
-			       error = 'interrupted: labctl exited while this run was in flight'
-			 WHERE status IN (?, ?)`,
-			StatusCancelled, at.UnixMicro(), StatusQueued, StatusRunning)
-		return err
-	})
+	owners, err := s.ActiveOwners(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("recovering orphaned runs: %w", err)
+		return nil, err
 	}
-	return ids, nil
+	return s.recoverOwners(ctx, owners, at)
 }
 
 // PruneRuns deletes finished runs that ended before the given time, along with
@@ -353,7 +371,8 @@ func (s *Store) PruneRuns(ctx context.Context, before time.Time) (int64, error) 
 
 const selectRunColumns = `
 	SELECT id, kind, target, lock_key, status, actor, argv, script, timeout_ms,
-	       queued_at, started_at, ended_at, duration_us, exit_code, error
+	       queued_at, started_at, ended_at, duration_us, exit_code, error,
+	       owner_id, recovery_state, recovery_reason, released_at, released_by
 	  FROM runs`
 
 // scanner covers both *sql.Row and *sql.Rows.
@@ -370,10 +389,11 @@ func scanRun(sc scanner) (Run, error) {
 		ended     sql.NullInt64
 		durUs     sql.NullInt64
 		exitCode  sql.NullInt64
+		released  sql.NullInt64
 	)
 	if err := sc.Scan(&r.ID, &r.Kind, &r.Target, &r.LockKey, &status, &r.Actor,
 		&argv, &r.Script, &timeoutMs, &queuedAt, &started, &ended, &durUs,
-		&exitCode, &r.Error); err != nil {
+		&exitCode, &r.Error, &r.OwnerID, &r.RecoveryState, &r.RecoveryReason, &released, &r.ReleasedBy); err != nil {
 		return Run{}, err
 	}
 
@@ -382,6 +402,7 @@ func scanRun(sc scanner) (Run, error) {
 	r.QueuedAt = time.UnixMicro(queuedAt).UTC()
 	r.StartedAt = fromMicro(started)
 	r.EndedAt = fromMicro(ended)
+	r.ReleasedAt = fromMicro(released)
 	if durUs.Valid {
 		r.Duration = time.Duration(durUs.Int64) * time.Microsecond
 	}

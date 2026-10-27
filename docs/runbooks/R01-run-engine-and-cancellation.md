@@ -150,15 +150,38 @@ flight, reopens the database, and asserts four things - verify the assertions
 read the way you would expect by skimming
 `internal/run/engine_test.go:TestRecoveryOnStart`:
 
-- the run is `cancelled`, not still `running`,
+- its saved phase remains `running` with recovery required,
 - its error explains the interruption,
 - **its partial log survived**,
-- **its lock was released** (otherwise that lab is wedged forever).
+- **its key remains reserved** until explicit operator release.
 
-🔍 Reason about the failure mode: if recovery did not run, what would happen the
-next time you tried to operate on that lab? (Answer: a permanent lock conflict
-with a run that no longer exists.) Note whether the released-lock assertion is
-present.
+Starting another engine must leave a live owner's record and key untouched.
+Run the shutdown and native-process cases too:
+
+```bash
+$ go test -race -count=1 -run 'TestStartPreservesAnotherEngine|TestShutdownTimeoutRetainsOwnership|TestRecoveryKeepsKeyWhileChildSurvives' ./internal/run/
+$ go test -race -count=1 -run 'TestOwnerLockSubprocess|TestLegacyOwnerMigration|TestMigrationRefusesUncertainOwners|TestMigrationRequiresOfflineStore' ./internal/runowner/ ./internal/store/
+```
+
+**Expect:** PASS. A timed-out shutdown retains the owner lock and store until
+cleanup returns. After the owner process dies, a surviving child keeps doing
+work while the run's key remains reserved. Explicit release records its actor,
+time, reason and former owner, permits a replacement run, and does not claim
+that the child stopped. Children must not inherit the owner descriptor.
+
+For a lab you have inspected, preview and explicitly release interrupted work:
+
+```bash
+$ ./bin/labctl runs recover <run-id>
+$ ./bin/labctl runs recover <run-id> --force
+```
+
+The preview changes nothing. A busy, missing or failed owner probe keeps the
+key even with `--force`. Do not recreate owner files to bypass this check.
+Follow the [offline upgrade procedure](../reference/cli/lifecycle.md#upgrade-the-run-store-offline)
+before migrating. Legacy rows retain their logs and keys and use the same
+explicit release path. Remote cancellation still records a terminal status
+before cleanup returns; these recovery tests do not resolve that separate limit.
 
 ---
 
@@ -222,6 +245,7 @@ $ ./bin/labctl runs logs ../../../etc/passwd
 $ ./bin/labctl runs list --help
 $ ./bin/labctl runs logs --help
 $ ./bin/labctl runs cancel --help
+$ ./bin/labctl runs recover --help
 ```
 
 **Expect:** each explains itself without needing the source. Note anything
@@ -269,7 +293,7 @@ $ git status --short          # should show no leftover scratch files
 | 1 | Database created at `SNOWOPS_HOME` | | |
 | 2 | Cancellation suite passes on this OS | | |
 | 3 | **No process survives cancellation** | | |
-| 4 | Interrupted run recovered, log intact, lock released | | |
+| 4 | Live owner preserved; interrupted key held until audited operator release | | |
 | 5 | Lock conflict refused immediately and clearly | | |
 | 6 | No log lines lost across disconnect or slow reader | | |
 | 7 | Script traversal refused | | |

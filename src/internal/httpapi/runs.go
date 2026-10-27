@@ -21,6 +21,7 @@ import (
 // runView is the API representation of a store.Run. Durations are in
 // milliseconds.
 type runView struct {
+	runRecoveryView
 	ID         string     `json:"id"`
 	Kind       string     `json:"kind"`
 	Target     string     `json:"target,omitempty"`
@@ -36,7 +37,8 @@ type runView struct {
 
 func toRunView(r store.Run) runView {
 	v := runView{
-		ID: r.ID, Kind: r.Kind, Target: r.Target, Status: string(r.Status),
+		runRecoveryView: toRunRecoveryView(r),
+		ID:              r.ID, Kind: r.Kind, Target: r.Target, Status: string(r.Status),
 		Actor: r.Actor, QueuedAt: r.QueuedAt, ExitCode: r.ExitCode, Error: r.Error,
 	}
 	if !r.StartedAt.IsZero() {
@@ -47,6 +49,30 @@ func toRunView(r store.Run) runView {
 	}
 	if r.Duration > 0 {
 		v.DurationMs = r.Duration.Milliseconds()
+	}
+	return v
+}
+
+type runRecoveryView struct {
+	OwnerID         string     `json:"ownerId,omitempty"`
+	RecoveryState   string     `json:"recoveryState,omitempty"`
+	RecoveryReason  string     `json:"recoveryReason,omitempty"`
+	RecoveryCommand string     `json:"recoveryCommand,omitempty"`
+	ReleasedAt      *time.Time `json:"releasedAt,omitempty"`
+	ReleasedBy      string     `json:"releasedBy,omitempty"`
+}
+
+func toRunRecoveryView(r store.Run) runRecoveryView {
+	v := runRecoveryView{RecoveryReason: r.RecoveryReason, ReleasedBy: r.ReleasedBy}
+	if r.RecoveryState != store.RecoveryNone && r.RecoveryState != "" {
+		v.OwnerID = r.OwnerID
+		v.RecoveryState = string(r.RecoveryState)
+	}
+	if r.RecoveryState == store.RecoveryRequired {
+		v.RecoveryCommand = "labctl runs recover " + r.ID + " --force"
+	}
+	if !r.ReleasedAt.IsZero() {
+		v.ReleasedAt = &r.ReleasedAt
 	}
 	return v
 }
@@ -72,6 +98,7 @@ type logLineView struct {
 }
 
 type runLogsView struct {
+	runRecoveryView
 	RunID  string        `json:"runId"`
 	Status string        `json:"status"`
 	Lines  []logLineView `json:"lines"`
@@ -172,6 +199,7 @@ func (s *Server) handleRunLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := runLogsView{RunID: id, Status: string(rec.Status), NextAfter: after, Lines: make([]logLineView, 0, len(lines))}
+	out.runRecoveryView = toRunRecoveryView(rec)
 	for _, l := range lines {
 		out.Lines = append(out.Lines, logLineView{Seq: l.Seq, At: l.At, Stream: string(l.Stream), Text: l.Text})
 		out.NextAfter = l.Seq
@@ -197,6 +225,10 @@ func (s *Server) handleRunCancel(w http.ResponseWriter, r *http.Request) {
 	if rec.Status.Terminal() {
 		respondError(w, r, http.StatusConflict, "already_finished",
 			"run "+id+" has already finished ("+string(rec.Status)+")")
+		return
+	}
+	if rec.RecoveryState == store.RecoveryRequired {
+		respondError(w, r, http.StatusConflict, "recovery_required", "run "+id+" requires recovery; check the lab, then use labctl runs recover "+id+" --force")
 		return
 	}
 	if _, err := s.runStore.AppendLogs(r.Context(), id, []store.LogLine{{

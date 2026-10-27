@@ -26,6 +26,8 @@ func TestSkipSharedInit_LeafNameCollisions(t *testing.T) {
 		{"runs list skips", newTree("runs", "list"), true},
 		{"runs logs skips", newTree("runs", "logs"), true},
 		{"runs cancel skips", newTree("runs", "cancel"), true},
+		{"runs recover skips", newTree("runs", "recover"), true},
+		{"scenario recover does NOT skip", newTree("scenario", "recover"), false},
 		{"scenario list does NOT skip", newTree("scenario", "list"), false},
 		{"app list does NOT skip", newTree("app", "list"), false},
 		{"service list does NOT skip", newTree("service", "list"), false},
@@ -51,7 +53,7 @@ func TestSkipSharedInit_RealTree(t *testing.T) {
 	allowedSkips := map[string]bool{
 		"completion": true, "help": true, "doctor": true,
 		"runs": true, "validate": true,
-		"runs list": true, "runs logs": true, "runs cancel": true,
+		"runs list": true, "runs logs": true, "runs cancel": true, "runs recover": true,
 	}
 
 	var walk func(c *cobra.Command)

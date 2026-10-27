@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sagar2395/snowopslabs/internal/runowner"
 	"github.com/sagar2395/snowopslabs/internal/store"
 	"github.com/sagar2395/snowopslabs/internal/toolchain"
 )
@@ -89,6 +90,9 @@ type LockConflictError struct {
 }
 
 func (e *LockConflictError) Error() string {
+	if e.Holder.RecoveryState == store.RecoveryRequired {
+		return fmt.Sprintf("run %s requires recovery and holds key %s; check the lab, then use labctl runs recover %s --force", e.Holder.ID, e.LockKey, e.Holder.ID)
+	}
 	what := e.Holder.Kind
 	if e.Holder.Target != "" {
 		what += " " + e.Holder.Target
@@ -146,8 +150,13 @@ type Engine struct {
 
 	queue chan string
 
-	mu      sync.Mutex
-	started bool
+	mu       sync.Mutex
+	started  bool
+	starting bool
+	stopped  bool
+	owner    *runowner.Lock
+	done     chan struct{}
+	closeErr error
 	// cancels maps a live run to the func that stops it. Present only while
 	// the run is queued or executing.
 	cancels map[string]context.CancelFunc
@@ -285,39 +294,68 @@ func New(st *store.Store, runner toolchain.Runner, resolver *toolchain.Resolver,
 	return e, nil
 }
 
-// Start reconciles interrupted runs and launches the worker pool.
-//
-// A run left queued or running by an earlier labctl process has nothing
-// executing it any more. Left alone it would hold its lock key forever, so
-// Start marks it cancelled and says why in its transcript.
-func (e *Engine) Start(ctx context.Context) error {
+// Start holds a fresh owner lock, reconciles unavailable owners and starts workers.
+func (e *Engine) Start(ctx context.Context) (resultErr error) {
 	e.mu.Lock()
-	if e.started {
+	if e.started || e.starting || e.stopped {
 		e.mu.Unlock()
 		return errors.New("run: engine already started")
 	}
-	e.started = true
-	e.queue = make(chan string, e.queueSize)
+	e.starting = true
+	e.done = make(chan struct{})
+	done := e.done
 	e.mu.Unlock()
-
-	orphans, err := e.store.RecoverOrphanedRuns(ctx, e.now())
+	var owner *runowner.Lock
+	var release func() error
+	completed := false
+	defer func() {
+		if !completed {
+			resultErr = errors.Join(resultErr, owner.Close())
+			if release != nil {
+				resultErr = errors.Join(resultErr, release())
+			}
+			e.mu.Lock()
+			e.starting = false
+			e.mu.Unlock()
+			close(done)
+		}
+	}()
+	var err error
+	release, err = e.store.Retain()
+	if err != nil {
+		return err
+	}
+	owner, err = runowner.New(ctx, e.store.Path())
+	if err != nil {
+		return fmt.Errorf("run: registering owner: %w", err)
+	}
+	_, err = e.store.RecoverOrphanedRuns(ctx, e.now())
 	if err != nil {
 		return fmt.Errorf("run: reconciling interrupted runs: %w", err)
 	}
-	for _, id := range orphans {
-		// Say so in the run's own transcript, not only in a status field.
-		_, _ = e.store.AppendLogs(ctx, id, []store.LogLine{{
-			At:     e.now(),
-			Stream: store.StreamSystem,
-			Text:   "run interrupted: labctl exited while this run was in flight",
-		}})
-		_ = e.store.FinishSteps(ctx, id, store.StepFailed, e.now())
+	e.mu.Lock()
+	if e.stopped {
+		e.mu.Unlock()
+		return ErrNotRunning
 	}
-
+	e.owner = owner
+	e.started, e.starting = true, false
+	e.queue = make(chan string, e.queueSize)
+	e.wg.Add(e.workers)
+	e.mu.Unlock()
 	for range e.workers {
-		e.wg.Add(1)
 		go e.worker()
 	}
+	go func() {
+		e.wg.Wait()
+		err := errors.Join(owner.Close(), release())
+		e.subs.closeAll()
+		e.mu.Lock()
+		e.closeErr = err
+		e.mu.Unlock()
+		close(done)
+	}()
+	completed = true
 	return nil
 }
 
@@ -326,12 +364,17 @@ func (e *Engine) Start(ctx context.Context) error {
 // processes running with no parent (ADR-0003).
 func (e *Engine) Shutdown(ctx context.Context) error {
 	e.mu.Lock()
-	if !e.started {
+	if !e.started && !e.starting && e.done == nil {
+		e.stopped = true
 		e.mu.Unlock()
 		return nil
 	}
 	e.started = false
-	close(e.shutdown)
+	if !e.stopped {
+		e.stopped = true
+		close(e.shutdown)
+	}
+	done := e.done
 
 	cancels := make([]context.CancelFunc, 0, len(e.cancels))
 	for _, cancel := range e.cancels {
@@ -343,16 +386,12 @@ func (e *Engine) Shutdown(ctx context.Context) error {
 		cancel()
 	}
 
-	done := make(chan struct{})
-	go func() {
-		e.wg.Wait()
-		close(done)
-	}()
-
 	select {
 	case <-done:
-		e.subs.closeAll()
-		return nil
+		e.mu.Lock()
+		err := e.closeErr
+		e.mu.Unlock()
+		return err
 	case <-ctx.Done():
 		return fmt.Errorf("run: shutdown timed out with runs still finishing: %w", ctx.Err())
 	}
@@ -373,10 +412,14 @@ func (e *Engine) Submit(ctx context.Context, spec Spec) (string, error) {
 
 	e.mu.Lock()
 	started := e.started
-	e.mu.Unlock()
 	if !started {
+		e.mu.Unlock()
 		return "", ErrNotRunning
 	}
+	e.wg.Add(1)
+	owner := e.owner.ID
+	e.mu.Unlock()
+	defer e.wg.Done()
 
 	// Resolve the script before recording anything, so a bad path fails here
 	// instead of leaving a failed run in the history.
@@ -411,6 +454,7 @@ func (e *Engine) Submit(ctx context.Context, spec Spec) (string, error) {
 	}
 
 	rec := store.Run{
+		OwnerID:  owner,
 		ID:       id,
 		Kind:     spec.Kind,
 		Target:   spec.Target,
@@ -438,21 +482,26 @@ func (e *Engine) Submit(ctx context.Context, spec Spec) (string, error) {
 	})
 
 	e.mu.Lock()
+	if !e.started {
+		e.mu.Unlock()
+		_ = e.store.FinishOwnedRun(ctx, id, owner, store.StatusCancelled, nil,
+			"cancelled during engine shutdown", e.now(), 0)
+		return "", ErrNotRunning
+	}
 	e.pending[id] = struct{}{}
 	e.specs.Store(id, spec)
-	e.mu.Unlock()
 
 	select {
 	case e.queue <- id:
+		e.mu.Unlock()
 		e.subs.publish(Event{Type: EventStatus, RunID: id, Status: store.StatusQueued})
 		return id, nil
 	default:
 		// Saturated. Mark the run failed so it does not sit queued forever.
-		e.mu.Lock()
 		delete(e.pending, id)
 		e.specs.Delete(id)
 		e.mu.Unlock()
-		_ = e.store.FinishRun(ctx, id, store.StatusFailed, nil,
+		_ = e.store.FinishOwnedRun(ctx, id, owner, store.StatusFailed, nil,
 			"rejected: the run queue is full", e.now(), 0)
 		return "", ErrQueueFull
 	}
@@ -477,6 +526,9 @@ func (e *Engine) Cancel(ctx context.Context, id string) error {
 	if rec.Status.Terminal() {
 		return fmt.Errorf("%w: %s is %s", ErrNotCancellable, id, rec.Status)
 	}
+	if rec.RecoveryState == store.RecoveryRequired {
+		return fmt.Errorf("%w: inspect the lab, then use labctl runs recover %s --force", store.ErrRecoveryRequired, id)
+	}
 
 	e.mu.Lock()
 	cancel, running := e.cancels[id]
@@ -497,7 +549,7 @@ func (e *Engine) Cancel(ctx context.Context, id string) error {
 		_, _ = e.store.AppendLogs(ctx, id, []store.LogLine{{
 			At: e.now(), Stream: store.StreamSystem, Text: "cancelled before it started",
 		}})
-		if err := e.store.FinishRun(ctx, id, store.StatusCancelled, nil,
+		if err := e.store.FinishOwnedRun(ctx, id, e.owner.ID, store.StatusCancelled, nil,
 			"cancelled by user", e.now(), 0); err != nil {
 			return err
 		}

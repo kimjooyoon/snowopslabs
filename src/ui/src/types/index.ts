@@ -323,8 +323,17 @@ export interface JobInfo {
 
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out'
 
+export interface RunRecovery {
+  ownerId?: string
+  recoveryState?: 'none' | 'required' | 'released'
+  recoveryReason?: string
+  recoveryCommand?: string
+  releasedAt?: string
+  releasedBy?: string
+}
+
 /** One recorded run from GET /api/v2/runs (the durable run engine's history). */
-export interface RunSummary {
+export interface RunSummary extends RunRecovery {
   id: string
   kind: string
   target?: string
@@ -359,7 +368,7 @@ export interface RunLogLine {
 }
 
 /** GET /api/v2/runs/{id}/logs?after= - a cursor-forward slice of the transcript. */
-export interface RunLogs {
+export interface RunLogs extends RunRecovery {
   runId: string
   status: RunStatus
   lines: RunLogLine[]

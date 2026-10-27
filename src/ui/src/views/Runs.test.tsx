@@ -77,6 +77,36 @@ describe('Runs view', () => {
     expect(within(detail.closest('.card') as HTMLElement).queryByRole('button', { name: /^cancel$/i })).toBeNull()
   })
 
+  it('shows interrupted work as recovery required with no advancing duration or cancel', async () => {
+    const server = serveContract()
+    const interrupted = { ...runningRun, recoveryState: 'required', recoveryCommand: 'labctl runs recover run_2 --force' }
+    server.override('GET', '/runs', 200, page([interrupted]))
+    server.override('GET', '/runs/run_2', 200, { ...interrupted, steps: [{ index: 1, name: 'install', status: 'running' }] })
+    server.override('GET', '/runs/run_2/logs', 200, { ...noLogs('running'), ...interrupted, done: false })
+    renderRuns()
+    expect((await screen.findAllByText('Recovery required')).length).toBeGreaterThan(0)
+    expect(await screen.findByText('labctl runs recover run_2 --force')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^cancel$/i })).toBeNull()
+    expect(screen.queryByText('streaming…')).toBeNull()
+    expect(screen.queryByText(/^\d+s…$/)).toBeNull()
+    expect(within(screen.getByText('Run ID').closest('.card') as HTMLElement).queryByText('running')).toBeNull()
+  })
+
+  it('shows the operator release audit and warns that execution may continue', async () => {
+    const server = serveContract()
+    const released = { ...runningRun, status: 'cancelled', recoveryState: 'released', releasedBy: 'uid=123 (operator)', releasedAt: '2026-10-27T10:00:00Z', ownerId: 'owner_former' }
+    server.override('GET', '/runs', 200, page([released]))
+    server.override('GET', '/runs/run_2', 200, { ...released, steps: [] })
+    server.override('GET', '/runs/run_2/logs', 200, noLogs('cancelled'))
+    renderRuns()
+    expect((await screen.findAllByText('Key released by operator')).length).toBeGreaterThan(0)
+    expect(screen.getByText('uid=123 (operator)')).toBeInTheDocument()
+    expect(screen.getByText('2026-10-27T10:00:00Z')).toBeInTheDocument()
+    expect(screen.getByText('owner_former')).toBeInTheDocument()
+    expect(screen.getByText(/operation may still be running/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^cancel$/i })).toBeNull()
+  })
+
   it('says why a hidden run shows no output', async () => {
     const server = serveContract()
     const hidden: RunSummary = { ...runningRun, id: 'run_9', kind: 'incident.inject', target: '(hidden)', status: 'succeeded' }
