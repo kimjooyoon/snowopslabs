@@ -20,3 +20,9 @@ an issue first.
 ## Template
 
 See [`0000-template.md`](0000-template.md).
+
+## Draft proposals
+
+- [Owner-aware run recovery](0002-owned-runs-and-cancellation.md): preserve live
+  owners and provide explicit recovery of interrupted work first; store cancellation
+  requests in a later phase. Not accepted or implemented.
