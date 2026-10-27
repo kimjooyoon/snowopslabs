@@ -160,7 +160,7 @@ Run the shutdown and native-process cases too:
 
 ```bash
 $ go test -race -count=1 -run 'TestStartPreservesAnotherEngine|TestShutdownTimeoutRetainsOwnership|TestRecoveryKeepsKeyWhileChildSurvives' ./internal/run/
-$ go test -race -count=1 -run 'TestOwnerLockSubprocess|TestLegacyOwnerMigration|TestMigrationRefusesUncertainOwners|TestMigrationRequiresOfflineStore' ./internal/runowner/ ./internal/store/
+$ go test -race -count=1 -run 'TestLockProcessLifetime|TestLegacyOwnerMigration|TestMigrationRefusesUncertainOwners|TestMigrationRequiresOfflineStore' ./internal/runowner/ ./internal/store/
 ```
 
 **Expect:** PASS. A timed-out shutdown retains the owner lock and store until
