@@ -425,6 +425,84 @@ esac`)
 	}
 }
 
+func TestReadInventory(t *testing.T) {
+	const cluster = `case "$*" in
+  *"get namespaces"*) printf 'namespace/default\nnamespace/keda\nnamespace/monitoring\n' ;;
+  *"owner=helm"*) printf 'keda         keda\nmonitoring   grafana\nmonitoring   grafana\n' ;;
+esac`
+	tests := []struct {
+		name    string
+		kubectl string
+		wantErr string
+		ns      map[string]bool
+		release map[[2]string]bool
+	}{
+		{
+			name:    "namespaces and releases from one listing each",
+			kubectl: cluster,
+			ns:      map[string]bool{"keda": true, "monitoring": true, "vault": false},
+			release: map[[2]string]bool{
+				{"keda", "keda"}: true, {"monitoring", "grafana"}: true,
+				{"monitoring", "loki"}: false, {"keda", "grafana"}: false,
+			},
+		},
+		{
+			name: "a release without a deployed revision does not count",
+			kubectl: `case "$*" in
+  *"get namespaces"*) echo namespace/monitoring ;;
+  *"owner=helm,status=deployed"*) echo 'monitoring   grafana' ;;
+  *"owner=helm"*) printf 'monitoring   grafana\nmonitoring   loki\n' ;;
+esac`,
+			ns:      map[string]bool{"monitoring": true},
+			release: map[[2]string]bool{{"monitoring", "grafana"}: true, {"monitoring", "loki"}: false},
+		},
+		{
+			name:    "an empty cluster holds nothing",
+			kubectl: "exit 0\n",
+			ns:      map[string]bool{"keda": false},
+			release: map[[2]string]bool{{"keda", "keda"}: false},
+		},
+		{
+			name:    "namespaces that cannot be listed are an error",
+			kubectl: "echo 'Unable to connect to the server' >&2; exit 1\n",
+			wantErr: "listing namespaces",
+		},
+		{
+			name: "releases that cannot be listed are an error",
+			kubectl: `case "$*" in
+  *"get namespaces"*) echo namespace/default ;;
+  *) echo 'secrets is forbidden' >&2; exit 1 ;;
+esac`,
+			wantErr: "listing Helm releases",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubKubectl(t, tt.kubectl)
+			inv, err := ReadInventory(t.Context())
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("ReadInventory() error = %v, want one containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadInventory() error = %v", err)
+			}
+			for ns, want := range tt.ns {
+				if got := inv.NamespaceExists(ns); got != want {
+					t.Errorf("NamespaceExists(%q) = %v, want %v", ns, got, want)
+				}
+			}
+			for rel, want := range tt.release {
+				if got := inv.HelmReleaseDeployed(rel[0], rel[1]); got != want {
+					t.Errorf("HelmReleaseDeployed(%q, %q) = %v, want %v", rel[0], rel[1], got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestUnreachableReason(t *testing.T) {
 	tests := []struct {
 		name     string

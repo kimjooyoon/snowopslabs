@@ -1,7 +1,7 @@
 $ labctl platform status
-No platform components have been installed through labctl yet.
-Install one with: labctl platform up <category|category/provider>
-Probe the live cluster with: labctl platform status --live
+COMPONENT                       STATE       LAST RUN
+ingress/traefik                 installed   -
+monitoring/metrics/prometheus   installed   -
 
 $ labctl platform up ingress
 install ingress/traefik started (run <run>). Following output - Ctrl-C stops it.
@@ -13,8 +13,9 @@ installing traefik
 Succeeded in <dur>.
 
 $ labctl platform status
-COMPONENT         STATE       LAST RUN
-ingress/traefik   installed   <run>
+COMPONENT                       STATE       LAST RUN
+ingress/traefik                 installed   <run>
+monitoring/metrics/prometheus   installed   -
 
 $ labctl platform status ingress
 COMPONENT         STATE       LAST RUN
@@ -39,9 +40,9 @@ removing traefik
 Succeeded in <dur>.
 
 $ labctl platform status
-COMPONENT                       STATE       LAST RUN
-ingress/traefik                 removed     <run>
-monitoring/metrics/prometheus   installed   <run>
+COMPONENT                       STATE           LAST RUN
+ingress/traefik                 not installed   <run>
+monitoring/metrics/prometheus   installed       <run>
 
 $ labctl platform up
 Installing ingress (traefik)...

@@ -26,6 +26,10 @@ case "$*" in
   *"--minify"*) echo https://127.0.0.1:6443 ;;
   "version -o json") echo '{"serverVersion":{"gitVersion":"v1.33.6+k3s1"}}' ;;
   "get nodes --no-headers") printf 'server-0 Ready\nagent-0 Ready\n' ;;
+  "get namespaces -o name")
+    printf 'namespace/%s\n' default kube-system traefik monitoring demo-app go-api
+    ;;
+  *"--all-namespaces -l owner=helm,status=deployed"*) echo "monitoring   prometheus" ;;
   "get namespace traefik --no-headers") echo "traefik Active 1h" ;;
   "get namespace monitoring --no-headers") echo "monitoring Active 1h" ;;
   "get namespace "*) exit 1 ;;

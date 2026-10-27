@@ -22,6 +22,7 @@ import (
 	"github.com/sagar2395/snowopslabs/internal/k8s"
 	"github.com/sagar2395/snowopslabs/internal/labcheck"
 	"github.com/sagar2395/snowopslabs/internal/scenario"
+	platsvc "github.com/sagar2395/snowopslabs/internal/service/platform"
 	"github.com/sagar2395/snowopslabs/pkg/checks"
 )
 
@@ -316,21 +317,17 @@ func (s *Server) handlePlatformStatus(w http.ResponseWriter, r *http.Request) {
 
 	categories := s.registry.Categories()
 	result := make(map[string][]map[string]any)
+	// A cluster that cannot be read shows every provider as not installed.
+	installed, _ := platsvc.Installed(ctx, s.registry)
 
 	for _, cat := range categories {
 		providers := s.registry.GetProviders(cat)
 		exclusive := s.registry.IsExclusive(cat)
 		for _, p := range providers {
-			// Providers that share a namespace are checked by Helm release;
-			// the rest by whether their namespace exists, which is cheaper.
-			installed := k8s.NamespaceExists(ctx, p.Namespace())
-			if p.SharesNamespace() {
-				installed = k8s.HelmReleaseExists(ctx, p.Namespace(), p.Name)
-			}
 			entry := map[string]any{
 				"name":      p.Name,
 				"category":  cat,
-				"installed": installed,
+				"installed": installed[platsvc.Component(cat, p.Name)],
 				"exclusive": exclusive,
 			}
 			result[cat] = append(result[cat], entry)

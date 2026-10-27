@@ -195,11 +195,11 @@ var platformStatusLive bool
 
 var platformStatusCmd = &cobra.Command{
 	Use:   "status [category|category/provider]",
-	Short: "Show platform component status from the run history; --live probes the cluster",
+	Short: "Show which platform components the cluster holds; --live runs each status.sh",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// By default, report state from the run store. --live runs each
-		// provider's status.sh against the cluster instead.
+		// By default, report what the cluster holds with the last run from
+		// the store. --live runs each provider's status.sh instead.
 		if !platformStatusLive {
 			return platformStatusFromStore(cmd, args)
 		}
@@ -254,7 +254,7 @@ var platformStatusCmd = &cobra.Command{
 }
 
 func init() {
-	platformStatusCmd.Flags().BoolVar(&platformStatusLive, "live", false, "probe the cluster with each provider's status.sh instead of reading the run history")
+	platformStatusCmd.Flags().BoolVar(&platformStatusLive, "live", false, "run each provider's status.sh against the cluster")
 	platformCmd.AddCommand(platformUpCmd)
 	platformCmd.AddCommand(platformDownCmd)
 	platformCmd.AddCommand(platformStatusCmd)

@@ -21,6 +21,7 @@ Succeeded in <dur>.
 Teardown complete. Removed 2 of 2 recorded components.
 
 $ labctl platform status
-COMPONENT            STATE     LAST RUN
-ingress/traefik      removed   <run>
-monitoring/grafana   removed   <run>
+COMPONENT                       STATE           LAST RUN
+ingress/traefik                 not installed   <run>
+monitoring/grafana              not installed   <run>
+monitoring/metrics/prometheus   installed       -

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -32,8 +33,9 @@ not in the inventory and are left untouched.`,
 
 // `labctl platform up|down <target>` installs or uninstalls one component as a
 // run on the run engine, under the lock `platform:<category>/<provider>`, and
-// `platform status` reads component state from the store. `platform up|down`
-// with no target, and `platform status --live`, use scriptExec instead.
+// `platform status` reads component state from the cluster, with the last run
+// from the store. `platform up|down` with no target, and `platform status
+// --live`, use scriptExec instead.
 
 // platformEngineFactory builds a platform service on a new run engine. Tests
 // replace it. Always defer cleanup.
@@ -65,9 +67,19 @@ func runPlatformComponentOp(cmd *cobra.Command, verb, category, provider string,
 	})
 }
 
-// platformStatusFromStore prints component state from the run history,
-// without contacting the cluster: one component with a target, otherwise every
-// component labctl has installed or uninstalled.
+// installedComponents returns every platform component the cluster holds,
+// keyed "category/provider", giving up after 10 seconds so a cluster that
+// does not answer cannot hang the command. Tests replace it.
+var installedComponents = func(ctx context.Context) (map[string]bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return platsvc.Installed(ctx, reg)
+}
+
+// platformStatusFromStore prints each component's state as the cluster shows
+// it, with its last labctl run: one component with a target, otherwise every
+// component the cluster holds or labctl has run. When the cluster cannot be
+// read, the state comes from the run history.
 func platformStatusFromStore(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	svc, st, _, cleanup, err := platformEngineFactory(ctx)
@@ -76,6 +88,13 @@ func platformStatusFromStore(cmd *cobra.Command, args []string) error {
 	}
 	defer cleanup()
 	out := cmd.OutOrStdout()
+
+	inCluster, cerr := installedComponents(ctx)
+	clusterRead := cerr == nil
+	if !clusterRead {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Could not read the cluster (%v), so this shows the run history only.\n"+
+			"Check the cluster with: labctl status\n\n", cerr)
+	}
 
 	var targets [][2]string
 	if len(args) == 1 {
@@ -89,8 +108,13 @@ func platformStatusFromStore(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
+		targets = withInstalled(targets, inCluster)
 		if len(targets) == 0 {
-			fmt.Fprintln(out, "No platform components have been installed through labctl yet.")
+			if clusterRead {
+				fmt.Fprintln(out, "No platform components are installed in the cluster.")
+			} else {
+				fmt.Fprintln(out, "No platform components have been installed through labctl yet.")
+			}
 			fmt.Fprintln(out, "Install one with: labctl platform up <category|category/provider>")
 			fmt.Fprintln(out, "Probe the live cluster with: labctl platform status --live")
 			return nil
@@ -104,9 +128,40 @@ func platformStatusFromStore(cmd *cobra.Command, args []string) error {
 		if serr != nil {
 			return serr
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", s.Component, s.State, dash(s.RunID))
+		fmt.Fprintf(w, "%s\t%s\t%s\n", s.Component, componentState(s, inCluster, clusterRead), dash(s.RunID))
 	}
 	return w.Flush()
+}
+
+// withInstalled adds each installed component that targets lacks, keeping
+// targets sorted by component name.
+func withInstalled(targets [][2]string, installed map[string]bool) [][2]string {
+	for comp := range installed {
+		cat, prov := splitComponent(comp)
+		if !slices.Contains(targets, [2]string{cat, prov}) {
+			targets = append(targets, [2]string{cat, prov})
+		}
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		return platsvc.Component(targets[i][0], targets[i][1]) < platsvc.Component(targets[j][0], targets[j][1])
+	})
+	return targets
+}
+
+// componentState is the state shown for a component: an install or uninstall
+// in flight first, then "error" when its last labctl run failed, even if the
+// cluster holds what that run left behind, then what the cluster holds.
+// Without the cluster, the run history decides.
+func componentState(s platsvc.Status, inCluster map[string]bool, clusterRead bool) string {
+	switch {
+	case s.State == platsvc.StateInstalling, s.State == platsvc.StateRemoving,
+		s.State == platsvc.StateError, !clusterRead:
+		return string(s.State)
+	case inCluster[s.Component]:
+		return string(platsvc.StateInstalled)
+	default:
+		return "not installed"
+	}
 }
 
 // platformComponentsWithHistory returns each component that has an install or

@@ -190,11 +190,11 @@ release is left behind.
 ## 5. Exact teardown from the inventory (W3-T04) ⚠️
 
 Every install/uninstall you ran above was recorded in the store's component
-inventory. `platform status` (no `--live`) shows it; `platform teardown` acts on
-it:
+inventory, and `platform teardown` acts on it. `platform status` (no `--live`)
+shows what the cluster holds, with labctl's last run for each component:
 
 ```bash
-$ labctl platform status          # store-derived: what labctl has installed
+$ labctl platform status          # what the cluster holds, with labctl's last run
 $ labctl platform teardown        # uninstall exactly that, reporting failures
 ```
 
@@ -203,6 +203,9 @@ streamed run, then prints `Removed N of M`. If a component's `uninstall.sh` fail
 it is named under **Could not remove** and teardown exits non-zero - the whole
 point of W3-T04: no silent `exit 0` that leaves residue behind. Components
 installed outside labctl are not in the inventory and are left untouched.
+That includes prerequisites from `scenario up --deploy-prereqs`: `status` lists
+them, but `teardown` won't remove them until prerequisites go through
+`service/platform`.
 
 The store-backed inventory + finish-hook recorder are proven hermetically:
 

@@ -3,6 +3,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -55,6 +57,23 @@ func TestResolveProvider(t *testing.T) {
 	}
 }
 
+// clusterWithout makes the fixture cluster stop listing namespace, as it does
+// once the component in it is uninstalled. Every other kubectl call answers as
+// before. Call it at most once per test.
+func clusterWithout(t *testing.T, l *terminal, namespace string) {
+	t.Helper()
+	if err := os.Rename(filepath.Join(l.Bin, "kubectl"), filepath.Join(l.Bin, "kubectl.fixture")); err != nil {
+		t.Fatal(err)
+	}
+	l.Stub(t, "kubectl", `#!/bin/sh
+fixture="$(dirname "$0")/kubectl.fixture"
+case "$*" in
+  "get namespaces -o name") "$fixture" "$@" | grep -vx "namespace/`+namespace+`" ;;
+  *) exec "$fixture" "$@" ;;
+esac
+`)
+}
+
 // One platform component at the terminal: install it, see it in the status,
 // uninstall it. Then the whole baseline in one command each way.
 func TestPlatform_Journey(t *testing.T) {
@@ -79,7 +98,10 @@ func TestPlatform_Journey(t *testing.T) {
 	if r := step("platform", "down", "ingress"); !strings.Contains(r.stdout, "removing traefik") {
 		t.Errorf("down ingress did not run traefik's uninstall script:\n%s", r.stdout)
 	}
-	step("platform", "status")
+	clusterWithout(t, l, "traefik")
+	if r := step("platform", "status"); !strings.Contains(r.stdout, "ingress/traefik                 not installed") {
+		t.Errorf("status still lists the uninstalled component as installed:\n%s", r.stdout)
+	}
 
 	up := step("platform", "up")
 	for _, want := range []string{"installing traefik", "installing prometheus", "installing grafana", "Platform installed successfully."} {
@@ -160,9 +182,13 @@ func TestPlatform_Teardown(t *testing.T) {
 			t.Errorf("teardown does not print %q:\n%s", want, r.stdout)
 		}
 	}
+	clusterWithout(t, l, "traefik")
 	status := l.mustRun("platform", "status")
-	if strings.Contains(status.stdout, "  installed  ") {
-		t.Errorf("a component is still listed as installed after teardown:\n%s", status.stdout)
+	for line := range strings.Lines(status.stdout) {
+		f := strings.Fields(line)
+		if len(f) >= 2 && (f[0] == "ingress/traefik" || f[0] == "monitoring/grafana") && f[1] == "installed" {
+			t.Errorf("%s is still listed as installed after teardown:\n%s", f[0], status.stdout)
+		}
 	}
 	l.golden("platform_teardown", r, status)
 }

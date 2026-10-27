@@ -11,7 +11,7 @@
     {
       "category": "monitoring",
       "exclusive": false,
-      "installed": true,
+      "installed": false,
       "name": "grafana"
     }
   ],
