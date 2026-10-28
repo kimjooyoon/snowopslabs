@@ -60,6 +60,7 @@ var shippedFaults = []string{
 	"oom-kill",
 	"pending-unschedulable",
 	"service-selector-broken",
+	"stray-pod-behind-service",
 }
 
 func TestRepoFaults_AllLoadAndValidate(t *testing.T) {

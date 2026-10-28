@@ -218,6 +218,7 @@ hatch from every state a learner can leave behind, and scores the result out of
 | `oom-kill` | resources | high | the workload's memory limit is cut just below what it needs under load, and k6 traffic is started - the pod idles fine and is OOMKilled once requests arrive |
 | `network-blackhole` | network | high | a deny-all-ingress NetworkPolicy lands in the workload's namespace - the service goes dark through the ingress |
 | `service-selector-broken` | config | medium | the workload's Service selector stops matching its pods - endpoints empty, pods perfectly healthy (sneaky) |
+| `stray-pod-behind-service` | network | high | a hand-run, Ready pod copies the Service labels but calls a dead upstream - endpoints have one extra address and a steady fraction of requests burn the SLO |
 | `noisy-neighbor` | resources | low | a batch tenant lands on the workload's node with big CPU requests and no limits, and takes the machine |
 | `pending-unschedulable` | resources | medium | a launch scales the workload to 4 and raises its CPU request past any node's allocatable CPU, so the new replicas stay Pending (`Insufficient cpu`) while the old ones serve; nothing crashes |
 | `liveness-probe-kill` | workload | high | a values update points the liveness probe at `/healthz`, a path the app does not serve; the kubelet kills a healthy app every 40 seconds or so (exit 0, `Liveness probe failed: ... statuscode: 404`) and k6 traffic sees bursts of 5xx |

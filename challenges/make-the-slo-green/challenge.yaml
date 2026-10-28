@@ -5,11 +5,11 @@ description: >
   is far above threshold and the burn rate is climbing. Every pod is Running
   and Ready, and nothing was deployed. Find the root cause and confirm the
   SLO recovers.
-category: config
-parTime: "8m"
+category: network
+parTime: "6m"
 setup:
   type: incident
-  ref: service-selector-broken
+  ref: stray-pod-behind-service
 grading:
   useDetectionCheck: true
 hintPenalty: 5

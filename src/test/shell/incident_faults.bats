@@ -93,6 +93,7 @@ case "$*" in
   *"get deploy"*"resources.requests.cpu}"*) printf '%s' "${CPU_REQUEST-50m}" ;;
   *"get deploy"*"resources.limits.cpu}"*) printf '%s' "${CPU_LIMIT-200m}" ;;
   *"get deploy"*"jsonpath={.spec.replicas}"*) printf '%s' "${REPLICAS-1}" ;;
+  *"get deploy"*'go-template={{with index (index .spec.template.spec.containers 0).ports 0}}'*) printf '%s' "${PORT_SPEC-http 8080}" ;;
   *"get deploy"*"go-template"*) printf 'app.kubernetes.io/name=cart,' ;;
   *"get hpa"*) [ -z "${HPA_TARGET-}" ] || printf '%s\n' "$HPA_TARGET" ;;
   *"get nodes"*"allocatable.cpu"*) printf '%s' "${NODE_ALLOCATABLE-4 3800m }" ;;
@@ -124,6 +125,10 @@ case "$*" in
     ;;
   *"get networkpolicy default-deny-egress"*) [ -n "${EGRESS_POLICY-}" ] || exit 1 ;;
   *"get deploy"*'env[?(@.name=="UPSTREAM_URL")].value}'*) printf '%s' "${UPSTREAM_NOW-}" ;;
+
+  # stray-pod-behind-service
+  *"get pod cart-debug"*) if [ -n "${STRAY_POD-}" ]; then echo "pod/cart-debug"; else exit 1; fi ;;
+  *"get deploy"*'containers[0].image}'*) printf '%s' "${IMAGE-registry.lab:5000/shop/cart:v1.4.0}" ;;
 
   # noisy-neighbor
   *"get pods"*"custom-columns=NAME"*) [ -z "${VICTIM_PODS-set}" ] || echo "${VICTIM_PODS-cart-abc node-1 Running}" ;;
@@ -158,6 +163,7 @@ liveness-probe-kill|patch deploy cart --type=json
 missing-secret-key|patch secret cart-secret --type=json
 cpu-throttling|set resources deploy/cart --limits=cpu=
 dns-egress-blocked|apply -n shop -f -
+stray-pod-behind-service|run cart-debug
 EOF
 }
 
@@ -358,6 +364,58 @@ STUB
   [ "$status" -ne 0 ]
   [[ "$output" == *"restore it by hand"* ]] || false
   refute_called kubectl "patch"
+}
+
+# ── stray-pod-behind-service ─────────────────────────────────────────────────
+
+@test "stray-pod-behind-service: inject creates a labelled debug pod and records its name" {
+  inject stray-pod-behind-service
+  [ "$status" -eq 0 ]
+  assert_called kubectl "run cart-debug"
+  assert_called kubectl "--labels=app.kubernetes.io/name=cart"
+  assert_called kubectl "--env=UPSTREAM_URL=http://no-such-upstream.invalid:8080"
+  assert_called kubectl "--from-literal=pod=cart-debug"
+}
+
+@test "stray-pod-behind-service: inject names the pod's port as the Deployment does, so a Service with a named targetPort routes to it" {
+  inject stray-pod-behind-service
+  [ "$status" -eq 0 ]
+  assert_called kubectl '"ports":.{"name":"http","containerPort":8080}'
+  assert_called kubectl "--override-type=strategic"
+}
+
+@test "stray-pod-behind-service: inject keeps an unnamed port unnamed" {
+  PORT_SPEC=" 9090" inject stray-pod-behind-service
+  [ "$status" -eq 0 ]
+  assert_called kubectl '"ports":.{"containerPort":9090}'
+}
+
+@test "stray-pod-behind-service: inject stops when the Deployment declares no port" {
+  PORT_SPEC="" inject stray-pod-behind-service
+  [ "$status" -ne 0 ]
+  refute_called kubectl " run cart-debug"
+}
+
+@test "stray-pod-behind-service: a second inject changes nothing" {
+  STRAY_POD=yes RECORD_pod=cart-debug inject stray-pod-behind-service
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already injected"* ]] || false
+  refute_called kubectl " run cart-debug"
+  refute_called kubectl "create configmap"
+}
+
+@test "stray-pod-behind-service: resolve deletes the recorded pod and disarms the alert" {
+  RECORD_pod=cart-debug resolve stray-pod-behind-service
+  [ "$status" -eq 0 ]
+  assert_called kubectl "delete pod cart-debug --ignore-not-found"
+  assert_called kubectl "delete prometheusrule labfault-stray-pod-behind-service"
+  assert_called kubectl "delete configmap labfault-stray-pod-behind-service"
+}
+
+@test "stray-pod-behind-service: resolve with no record removes the fixed debug pod" {
+  resolve stray-pod-behind-service
+  [ "$status" -eq 0 ]
+  assert_called kubectl "delete pod cart-debug --ignore-not-found"
 }
 
 # ── crashloop-bad-config ──────────────────────────────────────────────────────

@@ -1,0 +1,34 @@
+name: stray-pod-behind-service
+verified: false
+displayName: "Stray pod behind the Service: a fraction of requests fail"
+description: "The pager says {{.WorkloadName}} is burning its availability SLO: a steady fraction of requests fails, not all of them. Every pod is Running and Ready, nothing was deployed, and the app's own error-rate panel is flat. Clients see the errors; the app's metrics do not."
+category: network
+severity: high
+target:
+  namespace: "{{.WorkloadNamespace}}"
+  workload: "{{.WorkloadName}}"
+prerequisites:
+  platform:
+    - ingress
+  apps:
+    - "{{.WorkloadName}}"
+detection:
+  name: service-selects-only-deployment-pods
+  type: script
+  script: checks/resolved.sh
+  timeoutSeconds: 30
+expectAlert: LabFaultClientErrorRate
+
+references:
+  - label: "Kubernetes - Service"
+    url: "https://kubernetes.io/docs/concepts/services-networking/service/"
+    note: "A Service sends traffic to every ready pod whose labels match its selector, whichever controller created the pod."
+  - label: "Kubernetes - Owners and dependents"
+    url: "https://kubernetes.io/docs/concepts/overview/working-with-objects/owners-dependents/"
+    note: "Owner references show which controller owns a Kubernetes object."
+  - label: "Kubernetes - Debug Services"
+    url: "https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/"
+    note: "The endpoints and pods are the first places to look when a Service behaves unexpectedly."
+  - label: "Kubernetes - Debug pods"
+    url: "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/"
+    note: "Reading a pod's events and logs. Other causes of a steady fraction of failures: one bad replica of a rollout in progress, or one node with a broken network path."

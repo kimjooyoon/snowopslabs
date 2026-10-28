@@ -68,7 +68,9 @@ func TestVerifiedContentSet(t *testing.T) {
 
 	// Every fault has been reviewed on a live cluster. A new fault is listed
 	// here until its review passes.
-	unverifiedIncidents := map[string]bool{}
+	unverifiedIncidents := map[string]bool{
+		"stray-pod-behind-service": true,
+	}
 	verifiedIncidents := 0
 	for _, f := range c.Incidents() {
 		if f.Verified {
