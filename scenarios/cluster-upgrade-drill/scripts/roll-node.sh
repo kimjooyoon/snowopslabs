@@ -11,7 +11,7 @@ set -euo pipefail
 # image, standing in for the node-group roll a managed provider performs.
 #
 # Usage:
-#   TARGET_K3S_VERSION=v1.33.6-k3s1 bash roll-node.sh k3d-snowops-agent-0
+#   TARGET_K3S_VERSION=v1.33.13-k3s1 bash roll-node.sh k3d-snowops-agent-0
 #
 # Env:
 #   CLUSTER_NAME        k3d cluster name (default: snowops)
@@ -29,7 +29,7 @@ die() {
 
 [ -n "$NODE" ] || die "usage: TARGET_K3S_VERSION=<tag> bash roll-node.sh <node-name>"
 [ -n "${TARGET_K3S_VERSION:-}" ] ||
-  die "TARGET_K3S_VERSION is required (e.g. v1.33.6-k3s1). Current versions: kubectl get nodes"
+  die "TARGET_K3S_VERSION is required (e.g. v1.33.13-k3s1). Current versions: kubectl get nodes"
 
 for bin in k3d kubectl docker; do
   command -v "$bin" >/dev/null 2>&1 || die "'$bin' is required but not installed."
@@ -44,12 +44,14 @@ kubectl get node "$NODE" >/dev/null 2>&1 || die "node '${NODE}' not found. See: 
 server_ver="$(kubectl get node -l node-role.kubernetes.io/control-plane \
   -o jsonpath='{.items[0].status.nodeInfo.kubeletVersion}' 2>/dev/null || true)"
 minor_of() { echo "$1" | sed 's/^v//' | cut -d. -f2 | sed 's/[^0-9].*//'; }
+# A sortable key for vX.Y.Z, ignoring the +k3sN or -k3sN build suffix.
+version_key() { echo "$1" | sed 's/^v//; s/[-+].*//' | awk -F. '{ printf "%03d%03d%03d", $1, $2, $3 }'; }
 target_minor="$(minor_of "$TARGET_K3S_VERSION")"
 server_minor="$(minor_of "${server_ver:-v0.0.0}")"
 node_ver="$(kubectl get node "$NODE" -o jsonpath='{.status.nodeInfo.kubeletVersion}')"
 node_minor="$(minor_of "$node_ver")"
 
-if [ -n "$target_minor" ] && [ -n "$node_minor" ] && [ "$target_minor" -lt "$node_minor" ]; then
+if [ -n "$node_minor" ] && [ "$(version_key "$TARGET_K3S_VERSION")" -lt "$(version_key "$node_ver")" ]; then
   die "refusing to downgrade ${NODE}: it runs ${node_ver}, target is ${TARGET_K3S_VERSION}."
 fi
 if [ -n "$target_minor" ] && [ -n "$server_minor" ] && [ "$((server_minor - target_minor))" -gt 3 ]; then

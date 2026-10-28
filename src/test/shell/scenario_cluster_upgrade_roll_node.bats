@@ -37,7 +37,7 @@ STUB
   stub_script kubectl <<'STUB'
 case "$*" in
   *"node-role.kubernetes.io/control-plane"*) echo "v1.33.6+k3s1" ;;
-  "get node k3d-lab-agent-0 -o jsonpath={.status.nodeInfo.kubeletVersion}") echo "v1.33.6+k3s1" ;;
+  "get node k3d-lab-agent-0 -o jsonpath={.status.nodeInfo.kubeletVersion}") echo "${KUBELET_VERSION:-v1.33.6+k3s1}" ;;
   "get node k3d-lab-agent-0 -o jsonpath={.spec.unschedulable}") echo true ;;
   "get node k3d-lab-agent-0") exit 0 ;;
   *"get pods --all-namespaces"*"{.image}"*) printf 'go-api:v1.2.0\nquay.io/prometheus/node-exporter:v1.9.0\n' ;;
@@ -102,4 +102,19 @@ STUB
   [ "$status" -ne 0 ]
   [[ "$output" == *"is not cordoned"* ]] || false
   refute_called k3d "node delete"
+}
+
+# A node must never come back older than it was, a patch release included.
+@test "it refuses a patch downgrade within the same minor version" {
+  KUBELET_VERSION=v1.33.13+k3s1 run bash "$SCRIPT" k3d-lab-agent-0
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"refusing to downgrade k3d-lab-agent-0"* ]] || false
+  refute_called k3d "node delete"
+}
+
+@test "it rolls a node onto a newer patch of its minor version" {
+  TARGET_K3S_VERSION=v1.33.13-k3s1 run bash "$SCRIPT" k3d-lab-agent-0
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  assert_called k3d "--image rancher/k3s:v1.33.13-k3s1"
+  [[ "$output" != *"newer than the"* ]] || false
 }
