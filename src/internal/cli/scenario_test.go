@@ -131,6 +131,67 @@ func TestScenario_Journey(t *testing.T) {
 	l.golden("scenario_journey", steps...)
 }
 
+// A scenario that needs a platform component the lab lacks: with
+// --deploy-prereqs, `scenario up` installs it as a recorded run, `platform
+// status` lists it with that run, and `platform teardown` removes it.
+func TestScenario_DeployPrereqsInstallsThePlatformComponent(t *testing.T) {
+	l := newTerminal(t)
+	l.Write(t, "platform/cost/opencost/install.sh", "#!/usr/bin/env bash\nset -eu\necho installing opencost\ntouch \"$(dirname \"$0\")/INSTALLED\"\n")
+	l.Write(t, "platform/cost/opencost/uninstall.sh", "#!/usr/bin/env bash\nset -eu\necho removing opencost\nrm -f \"$(dirname \"$0\")/INSTALLED\"\n")
+	l.Write(t, "scenarios/costed/scenario.yaml", `apiVersion: scenario.snowops.net/v2
+name: costed
+displayName: Costed
+description: A scenario for {{.WorkloadName}} that needs a cost tool
+category: reliability
+prerequisites:
+  platform: [cost/opencost]
+components:
+  - name: setup
+    type: script
+    script: setup.sh
+`)
+	l.Write(t, "scenarios/costed/setup.sh", "#!/usr/bin/env bash\necho costed set up\n")
+	// The cluster holds the opencost namespace while its install marker exists.
+	if err := os.Rename(filepath.Join(l.Bin, "kubectl"), filepath.Join(l.Bin, "kubectl.fixture")); err != nil {
+		t.Fatal(err)
+	}
+	l.Stub(t, "kubectl", `#!/bin/sh
+fixture="$(dirname "$0")/kubectl.fixture"
+if [ -f '`+filepath.Join(l.Root, "platform", "cost", "opencost", "INSTALLED")+`' ]; then
+  case "$*" in
+    "get namespaces -o name") "$fixture" "$@"; echo namespace/opencost; exit 0 ;;
+    "get namespace opencost --no-headers") echo "opencost Active 1h"; exit 0 ;;
+  esac
+fi
+exec "$fixture" "$@"
+`)
+
+	up := l.mustRun("scenario", "up", "costed", "--deploy-prereqs")
+	for _, want := range []string{"installing cost/opencost...", "install cost/opencost started (run ", "installing opencost", "costed set up"} {
+		if !strings.Contains(up.stdout, want) {
+			t.Errorf("scenario up --deploy-prereqs does not print %q:\n%s", want, up.stdout)
+		}
+	}
+
+	status := l.mustRun("platform", "status")
+	listed := false
+	for line := range strings.Lines(status.stdout) {
+		if f := strings.Fields(line); len(f) == 3 && f[0] == "cost/opencost" {
+			listed = f[1] == "installed" && f[2] != "-"
+		}
+	}
+	if !listed {
+		t.Errorf("status does not list cost/opencost as installed with the run that installed it:\n%s", status.stdout)
+	}
+
+	if r := l.mustRun("platform", "teardown"); !strings.Contains(r.stdout, "removing opencost") {
+		t.Errorf("teardown does not remove the prerequisite scenario up installed:\n%s", r.stdout)
+	}
+	if l.exists("platform/cost/opencost/INSTALLED") {
+		t.Error("teardown reported success but did not run opencost's uninstall script")
+	}
+}
+
 // A scenario stays bound to the app it was activated for: verify and down act
 // on that app without being told again.
 func TestScenario_KeepsTheAppItWasActivatedFor(t *testing.T) {

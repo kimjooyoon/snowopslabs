@@ -203,9 +203,9 @@ streamed run, then prints `Removed N of M`. If a component's `uninstall.sh` fail
 it is named under **Could not remove** and teardown exits non-zero - the whole
 point of W3-T04: no silent `exit 0` that leaves residue behind. Components
 installed outside labctl are not in the inventory and are left untouched.
-That includes prerequisites from `scenario up --deploy-prereqs`: `status` lists
-them, but `teardown` won't remove them until prerequisites go through
-`service/platform`.
+Prerequisites that `scenario up --deploy-prereqs` (or `incident inject` and
+`challenge start` with the same flag) installs are runs like any `platform up`,
+so they are in the inventory and `teardown` removes them.
 
 The store-backed inventory + finish-hook recorder are proven hermetically:
 
