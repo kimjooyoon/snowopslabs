@@ -1,4 +1,5 @@
 name: pending-unschedulable
+verified: true
 displayName: "Pending: replicas no node can hold"
 description: "We scaled {{.WorkloadName}} to 4 for a launch, and READY has said 3/4 ever since. Two pods from the change have never started, and the nodes are mostly idle. Nothing is crashing, restarting or being killed, and every request still gets an answer, but there is no headroom for the launch traffic. The pager says the Deployment has fewer replicas available than it asked for."
 category: resources

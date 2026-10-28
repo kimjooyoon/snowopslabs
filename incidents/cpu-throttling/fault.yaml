@@ -1,4 +1,5 @@
 name: cpu-throttling
+verified: true
 displayName: "CPU throttling: a limit set to save cost"
 description: "{{.WorkloadName}} has got slow since the cost review's resource changes went out, and the latency SLO is burning: p99 is in seconds while the median still looks fine. Nothing restarts, nothing is OOMKilled, every pod is Running and Ready, and the error rate is flat. The node it runs on is nearly idle, so this is not a crowded machine."
 category: resources

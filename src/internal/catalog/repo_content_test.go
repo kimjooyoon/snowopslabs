@@ -68,13 +68,7 @@ func TestVerifiedContentSet(t *testing.T) {
 
 	// Every fault has been reviewed on a live cluster. A new fault is listed
 	// here until its review passes.
-	unverifiedIncidents := map[string]bool{
-		"cpu-throttling":        true,
-		"dns-egress-blocked":    true,
-		"liveness-probe-kill":   true,
-		"missing-secret-key":    true,
-		"pending-unschedulable": true,
-	}
+	unverifiedIncidents := map[string]bool{}
 	verifiedIncidents := 0
 	for _, f := range c.Incidents() {
 		if f.Verified {
@@ -86,7 +80,7 @@ func TestVerifiedContentSet(t *testing.T) {
 			t.Errorf("incident %q is unverified but not in the known unverified set", f.Name)
 		}
 	}
-	if verifiedIncidents != 6 {
-		t.Errorf("verified incidents = %d, want 6 (every shipped fault, all review-confirmed)", verifiedIncidents)
+	if verifiedIncidents != 11 {
+		t.Errorf("verified incidents = %d, want 11 (every shipped fault, all review-confirmed)", verifiedIncidents)
 	}
 }
