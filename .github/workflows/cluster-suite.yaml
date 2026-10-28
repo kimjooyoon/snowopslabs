@@ -123,14 +123,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Outside the checkout: create-pull-request commits every change in the
+      # working tree, so results downloaded into it would land in the PR.
       - uses: actions/download-artifact@v4
         with:
           pattern: result-*
-          path: results
+          path: ${{ runner.temp }}/results
           merge-multiple: true
 
       - name: Apply the results
-        run: sh src/test/cluster/apply-results.sh results
+        run: sh src/test/cluster/apply-results.sh "$RUNNER_TEMP/results"
 
       - uses: peter-evans/create-pull-request@v7
         with:
