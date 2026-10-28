@@ -234,6 +234,7 @@ liveness-probe-kill|-n go-api patch deploy go-api --type=json
 missing-secret-key|-n go-api patch deploy go-api --type=strategic
 cpu-throttling|-n go-api set resources deploy/go-api --requests=cpu=50m --limits=cpu=200m
 dns-egress-blocked|-n go-api patch networkpolicy default-deny-egress --type=json
+stray-pod-behind-service|-n go-api delete pod go-api-debug --ignore-not-found
 TABLE
 }
 

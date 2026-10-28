@@ -1,4 +1,5 @@
 name: dns-egress-blocked
+verified: true
 displayName: "DNS egress blocked: a security policy that forgot port 53"
 description: "Since this morning's security hardening, most requests to go-api fail with 502. /health answers, every pod is Ready and nothing restarts, and requests do arrive: unlike a network blackhole, the app answers, with an error from the dependency it calls. That dependency is up and healthy when you call it from anywhere else."
 category: network

@@ -1,4 +1,5 @@
 name: missing-secret-key
+verified: true
 displayName: "Missing Secret key: pods that never start"
 description: "{{.WorkloadName}} is completely down and every request fails. Two routine jobs ran overnight: the credential rotation, and a node rotation that replaced every pod. No new pod has started since: they are all stuck before their container runs, so there are no logs and no restarts. Nothing was deployed, and unlike a crash loop the app never gets far enough to fail."
 category: config

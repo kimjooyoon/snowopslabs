@@ -1,4 +1,5 @@
 name: liveness-probe-kill
+verified: true
 displayName: "Liveness probe kills a healthy app"
 description: "Since this morning's values update, {{.WorkloadName}} restarts every 40 seconds or so, and users get bursts of 503s between quiet spells. Every restart looks clean: the logs show the app starting, serving and shutting down on a signal, with no error. The app is not crashing on its own (no exit code 1) and is not being OOMKilled (no exit code 137)."
 category: workload

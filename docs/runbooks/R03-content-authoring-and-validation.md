@@ -36,7 +36,7 @@ $ go run ./cmd/labctl validate ; echo "exit=$?"
 **Expect:** a single success line and `exit=0`, e.g.
 
 ```
-✓ all content valid - 3 challenges, 11 incidents, 1 paths, 13 scenarios
+✓ all content valid - 4 challenges, 12 incidents, 1 paths, 13 scenarios
 ```
 
 If this fails on an untouched checkout, stop - the repo is broken, not your test.

@@ -213,6 +213,56 @@ STUB
   [[ "$output" == *"returned 503"* ]] || false
 }
 
+# ── stray-pod-behind-service ─────────────────────────────────────────────────
+
+stray_pod_stub() {
+  stub_script kubectl <<'STUB'
+case "$*" in
+  *"rollout status"*) exit 0 ;;
+  *"get deploy"*"jsonpath={.spec.replicas}"*) printf '%s' "${REPLICAS-2}" ;;
+  *"get deploy"*"jsonpath={.status.readyReplicas}"*) printf '%s' "${READY-2}" ;;
+  *"get svc"*"go-template={{range"*) printf '%s' "${SELECTOR-app.kubernetes.io/name=cart}" ;;
+  *"get pods"*"custom-columns=POD"*) printf '%s\n' "${PODS-cart-abc123-xyz abc123 ReplicaSet cart-abc123}" ;;
+  *"get rs"*) printf '%s' "${RS_OWNER-cart}" ;;
+esac
+STUB
+}
+
+@test "stray-pod-behind-service passes when selected pods belong to the Deployment and / answers" {
+  stray_pod_stub
+  check stray-pod-behind-service
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"every Service-selected pod belongs"* ]] || false
+}
+
+@test "stray-pod-behind-service fails while an extra selected pod is not Deployment-owned" {
+  stray_pod_stub
+  PODS='cart-abc123-xyz abc123 ReplicaSet cart-abc123
+cart-debug - None -' check stray-pod-behind-service
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not owned by deployment cart"* ]] || false
+}
+
+@test "stray-pod-behind-service fails the wrong fix: ingress answers but the stray pod remains selected" {
+  stray_pod_stub
+  PODS='cart-abc123-xyz abc123 ReplicaSet cart-abc123
+cart-debug - None -' HTTP_CODE=200 check stray-pod-behind-service
+  [ "$status" -ne 0 ]
+}
+
+@test "stray-pod-behind-service passes after the stray pod is relabelled away" {
+  stray_pod_stub
+  PODS='cart-abc123-xyz abc123 ReplicaSet cart-abc123' check stray-pod-behind-service
+  [ "$status" -eq 0 ]
+}
+
+@test "stray-pod-behind-service fails when its Deployment is scaled to zero" {
+  stray_pod_stub
+  REPLICAS=0 READY= PODS='' check stray-pod-behind-service
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"scaled to 0 replicas"* ]] || false
+}
+
 # ── network-blackhole ─────────────────────────────────────────────────────────
 
 # POLICIES lists "<name>|<policyTypes>|<ingress rules>" for each NetworkPolicy

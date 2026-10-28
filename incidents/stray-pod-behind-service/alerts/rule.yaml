@@ -1,0 +1,27 @@
+# Applied by inject.sh into the monitoring namespace; the `release:
+# prometheus` label is required by kube-prometheus-stack's rule selector, and
+# the `labfault` alert label routes it to the pager.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: labfault-stray-pod-behind-service
+  labels:
+    release: prometheus
+    labfault: "true"
+spec:
+  groups:
+    - name: labfault-stray-pod-behind-service
+      rules:
+        # Client-side (k6) failures: a pod Prometheus does not scrape still fails
+        # the requests the Service sends it, so the app's own metrics miss them.
+        - alert: LabFaultClientErrorRate
+          expr: |
+            sum(rate(k6_http_reqs_total{url=~"https?://${TARGET_WORKLOAD}\\..*",expected_response="false"}[2m]))
+              / sum(rate(k6_http_reqs_total{url=~"https?://${TARGET_WORKLOAD}\\..*"}[2m])) > 0.05
+          for: 30s
+          labels:
+            labfault: "true"
+            severity: critical
+          annotations:
+            summary: "${TARGET_WORKLOAD} is returning a steady fraction of 5xx responses"
+            description: "More than 5% of the load generator's requests to ${TARGET_WORKLOAD} failed for 30 seconds. The error budget is burning while every replica may still report Ready. Compare what clients see with what the app reports, then look at what the Service sends traffic to."

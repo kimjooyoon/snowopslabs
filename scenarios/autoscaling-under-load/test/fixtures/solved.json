@@ -1,8 +1,8 @@
 {
   "vars": {
-    "DomainSuffix": "snowops-e2e.localhost",
+    "DomainSuffix": "snowops.localhost",
     "IngressClass": "traefik",
-    "IngressURLSuffix": "snowops-e2e.localhost",
+    "IngressURLSuffix": "snowops.localhost",
     "LokiRetentionPeriod": "168h",
     "MaxReplicas": "6",
     "MaxTailAmplification": "10",
@@ -16,13 +16,13 @@
     "WorkloadPort": "8080",
     "WorkloadService": "go-api.go-api.svc.cluster.local"
   },
-  "prometheusURL": "http://prometheus.snowops-e2e.localhost",
+  "prometheusURL": "http://prometheus.snowops.localhost",
   "kubectl": {
     "get deployment/keda-operator --namespace keda -o jsonpath={.status.readyReplicas}": {
       "out": "1"
     },
     "get hpa/keda-hpa-go-api --namespace go-api -o jsonpath={.status.currentReplicas}": {
-      "out": "2"
+      "out": "3"
     },
     "get hpa/keda-hpa-go-api --namespace go-api -o name": {
       "out": "horizontalpodautoscaler.autoscaling/keda-hpa-go-api\n"
@@ -34,11 +34,11 @@
   "http": {
     "prometheus/api/v1/query?query=%28sum%28rate%28http_server_request_duration_seconds_count%7Bapp%3D%22go-api%22%2Chttp_response_status_code%3D~%225..%22%7D%5B3m%5D%29%29+or+vector%280%29%29+%2F+clamp_min%28sum%28rate%28http_server_request_duration_seconds_count%7Bapp%3D%22go-api%22%7D%5B3m%5D%29%29%2C+0.001%29": {
       "status": 200,
-      "body": "{\"status\":\"success\",\"data\":{\"resultType\":\"vector\",\"result\":[{\"metric\":{},\"value\":[1791984033.983,\"0\"]}]}}"
+      "body": "{\"status\":\"success\",\"data\":{\"resultType\":\"vector\",\"result\":[{\"metric\":{},\"value\":[1793093284.638,\"0\"]}]}}"
     },
     "prometheus/api/v1/query?query=histogram_quantile%280.99%2C+sum%28rate%28http_server_request_duration_seconds_bucket%7Bapp%3D%22go-api%22%7D%5B3m%5D%29%29+by+%28le%29%29+%2F+clamp_min%28histogram_quantile%280.50%2C+sum%28rate%28http_server_request_duration_seconds_bucket%7Bapp%3D%22go-api%22%7D%5B3m%5D%29%29+by+%28le%29%29%2C+0.001%29": {
       "status": 200,
-      "body": "{\"status\":\"success\",\"data\":{\"resultType\":\"vector\",\"result\":[{\"metric\":{},\"value\":[1791984033.980,\"1.9800000000000002\"]}]}}"
+      "body": "{\"status\":\"success\",\"data\":{\"resultType\":\"vector\",\"result\":[{\"metric\":{},\"value\":[1793093284.637,\"1.9800000000000002\"]}]}}"
     }
   },
   "results": {
