@@ -77,7 +77,7 @@ checks:
     type: script
     script: checks/check-node-versions.sh
     pending: true
-    remediation: "Roll every worker the drill started with - the check names the ones still outstanding. A cluster nobody has touched also has one version everywhere, which is why this is graded against the node names recorded at activation rather than against version uniformity alone."
+    remediation: "Roll every worker the drill started with onto the same target version - the check names the ones still outstanding, or the workers whose versions differ. Only the workers are graded: the control plane is not part of the drill and keeps the version it started on. A cluster nobody has touched also has one version everywhere, which is why this is graded against the workers recorded at activation rather than against version uniformity alone."
 
   - name: workload-survived-the-roll
     type: script

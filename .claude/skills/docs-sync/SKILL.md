@@ -83,6 +83,8 @@ version:
 - Lead with what the reader does, then the detail.
 - Plain words, concrete facts, no hype or filler; no em dashes.
 - One idea per sentence; no wave, task or PR numbers anywhere.
+- Describe the project itself. Never mention outside work that led to a change
+  or that a change is for.
 - Every command shown must run as written.
 - Mark anything not yet built as **Planned**. Never document an intention as if
   it ships, especially a security property.
@@ -97,3 +99,4 @@ loud to a colleague, rewrite it.
 - [ ] `make docs-check` passes.
 - [ ] Manifest updated and the site rebuilt, if a doc moved.
 - [ ] No task or ticket numbers introduced.
+- [ ] Nothing mentions outside work: only the project, its problem and its fix.

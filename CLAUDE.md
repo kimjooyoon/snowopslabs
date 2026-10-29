@@ -82,6 +82,10 @@ most often broken:
   story behind a change: no bug or incident that prompted it, no decision or
   alternative considered, no measurements or logs, no "used to" / "once" /
   "no longer", no task or ticket numbers. That belongs in the commit message.
+- Docs, content, comments, commits, issues and PRs describe the project
+  itself: the problem, the reproduction and what changes. Never mention outside
+  work you were doing when you found it, or that a change is for:
+  [WRITING](docs/WRITING.md#write-about-the-project-not-the-occasion).
 - No em dashes anywhere: docs, content, comments, CLI and UI text. Use a comma,
   a colon, parentheses or a plain " - ". `make docs-check` enforces it.
 - Everything a person reads (docs, READMEs, scenario and fault text, CLI and UI

@@ -745,6 +745,10 @@ actually flowing (promql), **success rate >= 99%** across the upgrade window
 > roll finished while any of them is still the same node. UID, not name: k3d
 > reuses a node's name whenever it can, so a genuinely rolled worker usually
 > comes back called exactly what it was.
+>
+> The check grades the workers only. The drill never rolls the control plane, so
+> it keeps the version it started on: workers on `v1.33.13` next to a `v1.33.6`
+> server is a finished roll. Workers left on different versions fail it.
 
 > **The availability grade was a ratio of two rates, which reads 1.00 on an idle
 > cluster.** The scenario's headline number was therefore green on an untouched

@@ -118,6 +118,9 @@ These hold everywhere. Breaking one is a review rejection, not a discussion.
 - The comment rule in [CLAUDE.md](../CLAUDE.md#hard-rules) applies to Go,
   shell, TypeScript and YAML alike: what the code does and why, never the
   story behind a change.
+- Docs, content, comments, commits, issues and PRs describe the project
+  itself, never the outside work that led to a finding or a change:
+  [WRITING](WRITING.md#write-about-the-project-not-the-occasion).
 - No em dashes in any tracked file. Use a comma, a colon, parentheses or a
   plain " - ". `make docs-check` runs `scripts/em-dash-check.sh`.
 - Text a person reads follows [WRITING](WRITING.md). `make docs-check` runs

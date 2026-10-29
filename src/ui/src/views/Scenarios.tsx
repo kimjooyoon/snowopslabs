@@ -162,8 +162,8 @@ export function Scenarios({ notify, requestConfirm }: ScenariosProps) {
       if (res.passed) {
         notify('success', 'All checks passed', `${name} is in its expected state.`)
       } else {
-        const failed = res.results.filter(c => !c.pass).length
-        notify('info', `${failed} of ${res.results.length} checks failing`, 'Checks can fail while pods are still starting - re-run in a moment to let them settle.')
+        const failing = res.results.filter(c => !c.pass).map(c => c.name)
+        notify('info', `${failing.length} of ${res.results.length} checks failing`, `Failing: ${failing.join(', ')}. The table below says why each one failed. Checks can fail while pods are still starting - re-run in a moment to let them settle.`)
       }
     } catch (e) {
       notify('error', 'Verify failed', e instanceof Error ? e.message : String(e))

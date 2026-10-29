@@ -19,7 +19,7 @@ setup() {
   # the live ones, every node is Ready, and the app runs on both.
   export CHECKPOINT_worker_uids="uid-a uid-b" CHECKPOINT_workers="worker-0 worker-1"
   export LIVE_UIDS="uid-server uid-a uid-b"
-  export VERSIONS="$(printf 'server-0 v1.31.4+k3s1\nworker-0 v1.31.4+k3s1\nworker-1 v1.31.4+k3s1')"
+  export NODE_VERSIONS="$(printf 'server-0 v1.31.4+k3s1\nworker-0 v1.31.4+k3s1\nworker-1 v1.31.4+k3s1')"
   export READINESS="$(printf 'server-0 True\nworker-0 True\nworker-1 True')"
   export PODS="$(printf 'cart-1 Running worker-0\ncart-2 Running worker-1')"
   stub_script kubectl <<'STUB'
@@ -32,7 +32,10 @@ case "$*" in
     printf '%s' "${!var-}"
     ;;
   *"get nodes"*"{.metadata.uid}"*) [ -z "${LIVE_UIDS-}" ] || printf '%s\n' $LIVE_UIDS ;;
-  *"get nodes"*"kubeletVersion"*) [ -z "${VERSIONS-}" ] || printf '%s\n' "$VERSIONS" ;;
+  *"get nodes -l !node-role.kubernetes.io/control-plane"*"kubeletVersion"*)
+    [ -z "${NODE_VERSIONS-}" ] || printf '%s\n' "$NODE_VERSIONS" | grep -v '^server-' ;;
+  *"get nodes -l node-role.kubernetes.io/control-plane"*"kubeletVersion"*)
+    printf '%s\n' "${NODE_VERSIONS-}" | awk '/^server-/ {printf "%s", $2; exit}' ;;
   *"get nodes"*'type=="Ready"'*) [ -z "${READINESS-}" ] || printf '%s\n' "$READINESS" ;;
   *"get nodes"*"unschedulable"*) [ -z "${CORDONED-}" ] || printf '%s\n' "$CORDONED" ;;
   *"get pods -l app=cart"*"waiting.reason"*) [ -z "${WAITING-}" ] || printf '%s\n' "$WAITING" ;;
@@ -60,10 +63,11 @@ check() {
 }
 
 # rolled sets a finished roll: both workers replaced on a newer version ten
-# minutes ago, with steady load served within the SLO throughout.
+# minutes ago, with steady load served within the SLO throughout. The control
+# plane is not part of the drill and keeps the version it started on.
 rolled() {
   export LIVE_UIDS="uid-server uid-c uid-d"
-  export VERSIONS="$(printf 'server-0 v1.32.1+k3s1\nworker-0 v1.32.1+k3s1\nworker-1 v1.32.1+k3s1')"
+  export NODE_VERSIONS="$(printf 'server-0 v1.31.4+k3s1\nworker-0 v1.32.1+k3s1\nworker-1 v1.32.1+k3s1')"
   export CHECKPOINT_roll_started_at="$((NOW_S - 600))"
   export RPS=19.8 RATIO=0.998
 }
@@ -103,11 +107,20 @@ rolled() {
   [[ "$output" != *"worker-0"* ]] || false
 }
 
-@test "node-versions fails a roll that left mixed kubelet versions" {
+@test "node-versions fails workers rolled onto different versions" {
   rolled
-  VERSIONS="$(printf 'server-0 v1.31.4+k3s1\nworker-0 v1.32.1+k3s1\nworker-1 v1.32.1+k3s1')" check check-node-versions
+  NODE_VERSIONS="$(printf 'server-0 v1.31.4+k3s1\nworker-0 v1.32.1+k3s1\nworker-1 v1.31.9+k3s1')" check check-node-versions
   [ "$status" -ne 0 ]
   [[ "$output" == *"mixed kubelet versions"* ]] || false
+  [[ "$output" == *"worker-1 v1.31.9+k3s1"* ]] || false
+}
+
+@test "node-versions does not hold the workers to the control plane's version" {
+  rolled
+  check check-node-versions
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"v1.32.1+k3s1"* ]] || false
+  [[ "$output" == *"The control plane stays on v1.31.4+k3s1"* ]] || false
 }
 
 @test "node-versions holds the cluster to TARGET_K3S_VERSION when it is set" {
@@ -121,7 +134,7 @@ rolled() {
 
 @test "node-versions fails when the versions cannot be read" {
   rolled
-  VERSIONS="" check check-node-versions
+  NODE_VERSIONS="" check check-node-versions
   [ "$status" -ne 0 ]
   [[ "$output" == *"could not read node versions"* ]] || false
 }
@@ -208,3 +221,4 @@ CASES
   [ "$status" -ne 0 ]
   [[ "$output" == *"could not list the nodes"* ]] || false
 }
+
