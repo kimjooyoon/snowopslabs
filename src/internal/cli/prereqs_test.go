@@ -11,9 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sagar2395/snowopslabs/internal/executor"
+	"github.com/sagar2395/snowopslabs/internal/config"
 	"github.com/sagar2395/snowopslabs/internal/labtest"
 	"github.com/sagar2395/snowopslabs/internal/platform"
+	platsvc "github.com/sagar2395/snowopslabs/internal/service/platform"
+	"github.com/sagar2395/snowopslabs/internal/store"
 )
 
 // writeProvider creates platform/<relDir>/install.sh so the registry scan
@@ -173,23 +175,83 @@ func TestStatus_ClusterDown(t *testing.T) {
 	l.golden("status_cluster_down", r)
 }
 
-// With --deploy-prereqs a missing component is installed, and the learner is
-// told which one and why before its install script runs.
+// With --deploy-prereqs a missing component is installed as a run through the
+// platform service, as `platform up` does, and the learner is told which one
+// and why before it starts. A failed install stops with the run that failed.
 func TestEnsurePlatformPrereqs_AutoInstall(t *testing.T) {
+	tests := []struct {
+		name       string
+		exitCode   int
+		wantErr    string
+		wantStatus store.Status
+	}{
+		{name: "installs it as a recorded run", wantStatus: store.StatusSucceeded},
+		{
+			name:       "a failed install stops and names the run",
+			exitCode:   1,
+			wantErr:    "installing platform prerequisite ingress/traefik: install ingress/traefik failed (run ",
+			wantStatus: store.StatusFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, st := fakePlatformEnv(t)
+			f.WhenArgsContain("ingress/traefik/install.sh", "installing traefik\n", tt.exitCode)
+			root := t.TempDir()
+			writeProvider(t, root, "ingress/traefik")
+			oldReg := reg
+			t.Cleanup(func() { reg = oldReg })
+			reg = platform.NewRegistry(root)
+			stubKubectl(t)
+
+			var out bytes.Buffer
+			err := ensurePlatformPrereqs(t.Context(), &out, []string{"ingress/traefik"}, true)
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("ensurePlatformPrereqs: %v\n%s", err, out.String())
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("error = %v, want it to say %q", err, tt.wantErr)
+			}
+			for _, want := range []string{
+				"Platform prerequisite ingress/traefik is not installed - installing ingress/traefik...",
+				"install ingress/traefik started (run ",
+				"installing traefik",
+			} {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("output does not say %q:\n%s", want, out.String())
+				}
+			}
+			runs, err := st.ListRuns(t.Context(), store.RunFilter{Kind: platsvc.KindInstall})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runs) != 1 || runs[0].Target != "ingress/traefik" || runs[0].Status != tt.wantStatus {
+				t.Fatalf("want one %s install run of ingress/traefik, got %+v", tt.wantStatus, runs)
+			}
+		})
+	}
+}
+
+// A prerequisite naming a category with several providers, none of them
+// chosen, stops before anything installs and says how to pick one.
+func TestEnsurePlatformPrereqs_AutoInstallNeedsAProvider(t *testing.T) {
+	_, st := fakePlatformEnv(t)
 	root := t.TempDir()
-	writeProvider(t, root, "cost/opencost")
-	oldReg, oldExec := reg, scriptExec
-	t.Cleanup(func() { reg, scriptExec = oldReg, oldExec })
+	writeProvider(t, root, "mesh/istio")
+	writeProvider(t, root, "mesh/linkerd")
+	oldReg, oldCfg := reg, cfg
+	t.Cleanup(func() { reg, cfg = oldReg, oldCfg })
 	reg = platform.NewRegistry(root)
-	scriptExec = executor.New(root)
+	cfg = &config.Config{}
 	stubKubectl(t)
 
-	var out bytes.Buffer
-	if err := ensurePlatformPrereqs(t.Context(), &out, []string{"cost/opencost"}, true); err != nil {
-		t.Fatalf("ensurePlatformPrereqs: %v", err)
+	err := ensurePlatformPrereqs(t.Context(), &bytes.Buffer{}, []string{"mesh"}, true)
+	for _, want := range []string{"resolving platform prerequisite mesh", "labctl platform up mesh/istio"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to say %q", err, want)
+		}
 	}
-	want := "Platform prerequisite cost/opencost is not installed - installing cost/opencost..."
-	if !strings.Contains(out.String(), want) {
-		t.Errorf("output does not say %q:\n%s", want, out.String())
+	if runs, _ := st.ListRuns(t.Context(), store.RunFilter{}); len(runs) != 0 {
+		t.Errorf("nothing should install, got %+v", runs)
 	}
 }

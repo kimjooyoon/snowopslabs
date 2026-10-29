@@ -57,8 +57,9 @@ environment variable of the same name wins over `.env`
 
 Removes exactly the components the inventory records as installed, in reverse
 order, and reports anything it could not remove instead of exiting 0 and hoping.
-Each uninstall is a recorded, cancellable run. Components installed outside
-labctl are not in the inventory and are left alone.
+Each uninstall is a recorded, cancellable run. The inventory holds what
+`platform up` and `--deploy-prereqs` installed; components installed outside
+labctl are not in it and are left alone.
 
 ```bash
 labctl platform teardown

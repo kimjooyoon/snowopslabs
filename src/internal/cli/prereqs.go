@@ -12,6 +12,7 @@ import (
 	"github.com/sagar2395/snowopslabs/internal/config"
 	"github.com/sagar2395/snowopslabs/internal/k8s"
 	"github.com/sagar2395/snowopslabs/internal/platform"
+	platsvc "github.com/sagar2395/snowopslabs/internal/service/platform"
 )
 
 // requireCluster fails with what to do next when the cluster's API server
@@ -104,25 +105,15 @@ func ensureAppsDeployed(ctx context.Context, apps []string, autoDeploy bool) err
 func ensurePlatformPrereqs(ctx context.Context, out io.Writer, prereqs []string, autoInstall bool) error {
 	missing := []string{}
 	for _, pre := range prereqs {
-		installed, known := platformPrereqInstalled(ctx, pre)
-		if !known || installed {
-			continue
-		}
-		if !autoInstall {
+		if installed, known := platformPrereqInstalled(ctx, pre); known && !installed {
 			missing = append(missing, pre)
-			continue
-		}
-		category, provider, err := resolveTarget(pre)
-		if err != nil {
-			return fmt.Errorf("resolving platform prerequisite %s: %w", pre, err)
-		}
-		fmt.Fprintf(out, "Platform prerequisite %s is not installed - installing %s/%s...\n", pre, category, provider)
-		if err := reg.Install(category, provider, scriptExec); err != nil {
-			return fmt.Errorf("installing platform prerequisite %s: %w", pre, err)
 		}
 	}
 	if len(missing) == 0 {
 		return nil
+	}
+	if autoInstall {
+		return installPlatformPrereqs(ctx, out, missing)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "platform prerequisite(s) not installed: %s\nInstall them with:\n", strings.Join(missing, ", "))
@@ -131,6 +122,34 @@ func ensurePlatformPrereqs(ctx context.Context, out io.Writer, prereqs []string,
 	}
 	b.WriteString("or re-run with --deploy-prereqs to install them first")
 	return errors.New(b.String())
+}
+
+// installPlatformPrereqs installs each prerequisite as a run through the
+// platform service, as `platform up <target>` does, so it holds the
+// component's lock and lands in the inventory that `platform teardown` reads.
+func installPlatformPrereqs(ctx context.Context, out io.Writer, prereqs []string) error {
+	svc, st, eng, cleanup, err := platformEngineFactory(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := eng.Start(ctx); err != nil {
+		return err
+	}
+	for _, pre := range prereqs {
+		category, provider, err := resolveTarget(pre)
+		if err != nil {
+			return fmt.Errorf("resolving platform prerequisite %s: %w", pre, err)
+		}
+		fmt.Fprintf(out, "Platform prerequisite %s is not installed - installing %s/%s...\n", pre, category, provider)
+		err = streamSubmittedRun(ctx, out, st, "install "+platsvc.Component(category, provider), func() (string, error) {
+			return svc.Install(ctx, category, provider)
+		})
+		if err != nil {
+			return fmt.Errorf("installing platform prerequisite %s: %w", pre, err)
+		}
+	}
+	return nil
 }
 
 // platformPrereqInstalled reports whether any provider a prerequisite names
