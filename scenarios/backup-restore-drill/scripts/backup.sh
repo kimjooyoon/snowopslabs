@@ -18,6 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LAB_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 # shellcheck source=scripts/_backup_lib.sh
 . "${SCRIPT_DIR}/_backup_lib.sh"
+. "${LAB_ROOT}/scripts/_lib/display.sh"
 
 NS="$(backup_ns "${1:-}")"
 BACKUP_DIR="$(backup_dir)"
@@ -87,8 +88,8 @@ COUNT=$(jq '.items | length' "$ARCHIVE")
 cp "$ARCHIVE" "$LATEST"
 
 echo "Backed up ${COUNT} object(s) to:"
-echo "  ${ARCHIVE}"
-echo "  ${LATEST}  (latest pointer)"
+echo "  $(display_path "${ARCHIVE}")"
+echo "  $(display_path "${LATEST}")  (latest pointer)"
 
 # Record the fingerprint of the data this backup does NOT contain. A manifest
 # export captures the PVC object; the bytes on the volume are outside it
@@ -101,8 +102,8 @@ if [ -n "$BOOT_ID" ]; then
   echo ""
   echo "PV data fingerprint at backup time: boot-id ${BOOT_ID}"
   echo "  NOT in the archive - a manifest backup captures the PVC object, not the volume's"
-  echo "  contents. Recorded in $(bootid_log "$NS") so you can see it change after a restore."
+  echo "  contents. Recorded in $(display_path "$(bootid_log "$NS")") so you can see it change after a restore."
 fi
 
 echo ""
-echo "Restore with: bash ${LAB_ROOT}/scenarios/backup-restore-drill/scripts/restore.sh ${NS}"
+echo "Restore with: bash $(display_path "${LAB_ROOT}/scenarios/backup-restore-drill/scripts/restore.sh") ${NS}"

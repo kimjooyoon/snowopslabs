@@ -14,6 +14,8 @@ set -eu
 # what the check reads afterwards.
 
 NS="${WORKLOAD_NAMESPACE}"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+. "$PROJECT_ROOT/scripts/_lib/display.sh"
 WITNESS="chaos-experiment-witness"
 
 FIRST="$(kubectl -n "$NS" get configmap "$WITNESS" -o jsonpath='{.data.first-seen}' 2>/dev/null || true)"
@@ -45,5 +47,5 @@ echo "PENDING: no chaos experiment has been seen in ${NS}." >&2
 echo "  Put load on the service first - an experiment against an idle service proves nothing:" >&2
 echo "    labctl traffic start --app ${WORKLOAD_NAME} --profile browse --rps 20 --duration 30m" >&2
 echo "  Then inject exactly one failure and watch the blast radius:" >&2
-echo "    bash ${PROJECT_ROOT:-.}/scenarios/chaos-engineering/scripts/inject.sh pod-kill --app ${WORKLOAD_NAME} --namespace ${WORKLOAD_NAMESPACE}" >&2
+echo "    bash $(display_path "${PROJECT_ROOT:-.}/scenarios/chaos-engineering/scripts/inject.sh") pod-kill --app ${WORKLOAD_NAME} --namespace ${WORKLOAD_NAMESPACE}" >&2
 exit 1

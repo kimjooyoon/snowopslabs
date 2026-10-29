@@ -9,15 +9,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 # shellcheck source=scripts/_backup_lib.sh
 . "${SCRIPT_DIR}/../scripts/_backup_lib.sh"
+. "${PROJECT_ROOT}/scripts/_lib/display.sh"
 
 NS="$(backup_ns "")"
 ARCHIVE="$(archive_path "$NS")"
-RESTORE_CMD="  bash ${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/restore.sh ${NS}"
+RESTORE_CMD="  bash $(display_path "${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/restore.sh") ${NS}"
 
 if [ ! -f "$ARCHIVE" ]; then
-  echo "FAIL: no archive at ${ARCHIVE} - there is nothing to have restored from." >&2
+  echo "FAIL: no archive at $(display_path "${ARCHIVE}") - there is nothing to have restored from." >&2
   echo "  You cannot restore what you never captured. Back up first, then break something." >&2
   exit 1
 fi

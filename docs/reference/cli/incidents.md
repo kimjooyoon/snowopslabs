@@ -56,7 +56,7 @@ labctl incident inject --random --category network
 | `--random` | off | pick a random eligible fault |
 | `--seed` | - | seed for `--random`, for reproducible team exercises |
 | `--category` | - | restrict `--random` to `workload`, `network`, `resources`, `storage` or `config` |
-| `--silent` | off | do not reveal which fault was injected: the inject prints neither the fault's name nor its script's output, `incident list` does not mark the active fault, `incident status` shows `(hidden - silent mode)` until the check passes, and the run history records the inject with the target `(hidden)` and withholds its output (`labctl runs logs` and `GET /runs/{id}/logs` refuse it) |
+| `--silent` | off | do not reveal which fault was injected: the inject prints neither the fault's name nor its script's output, `incident list` does not mark the active fault, unresolved `incident status` says only `NOT RESOLVED - keep digging, or: labctl incident hint` (a check error may say it could not run, without the check name or output), resolved status names the check and fault, and the run history records the inject with the target `(hidden)` and withholds its output (`labctl runs logs` and `GET /runs/{id}/logs` refuse it) |
 | `--force` | off | inject even when another incident is active |
 | `--deploy-prereqs` | off | install the platform components the fault needs, and build and deploy the apps it lists under `prerequisites.apps` (and its target, when that is an app), if they are not running. Without it, a missing app stops the inject with the command that deploys it. |
 
@@ -96,9 +96,10 @@ REST: `GET /api/v2/incidents`,
 `GET /api/v2/incidents/history`, `POST /api/v2/incidents/resolve[?name=]`.
 Silent mode hides the fault's identity in API responses until it is resolved:
 `GET /incidents` and `GET /incidents/status` answer `"fault": "(hidden)"` for
-the active incident. A silent inject from the UI broadcasts no job label or
-script output, and `GET /runs/{id}/logs` for its run answers
-`403 hidden_run`.
+the active incident. While unresolved, the status check contains only
+`"pass": false`, with no check name or output. Once resolved, the normal check
+result is returned. A silent inject from the UI broadcasts no job label or
+script output, and `GET /runs/{id}/logs` for its run answers `403 hidden_run`.
 `inject-random` picks among the faults eligible for the app named in `app`, and
 answers `409 no_eligible_fault` when there are none. `hint` and `resolve` answer
 `409 no_active_incident` when nothing is injected.

@@ -178,7 +178,10 @@ export function Incidents({ notify, requestConfirm }: IncidentsProps) {
         notify('success', 'Detection check passes', 'The fault is resolved - nice work.')
         load()
       } else if (st.active) {
-        notify('info', 'Still broken', st.check?.explanation || st.check?.error || 'The detection check does not pass yet.')
+        const silent = st.active.silent === true
+        notify('info', 'Still broken', silent
+          ? 'Not resolved yet - keep digging, or: labctl incident hint'
+          : st.check?.explanation || st.check?.error || 'The detection check does not pass yet.')
       }
     } catch (e) {
       notify('error', 'Status check failed', e instanceof Error ? e.message : String(e))
@@ -256,7 +259,9 @@ export function Incidents({ notify, requestConfirm }: IncidentsProps) {
                 <span className="banner-body">
                   {resolved
                     ? <>Detection check <code>{status.check.name}</code> passes - resolved.</>
-                    : <>Not resolved yet - <code>{status.check.name}</code> fails{checkDetail(status.check) ? `: ${checkDetail(status.check)}` : ''}.</>}
+                    : hideIdentity
+                      ? <>Not resolved yet - keep digging, or: <code>labctl incident hint</code>.</>
+                      : <>Not resolved yet - <code>{status.check.name}</code> fails{checkDetail(status.check) ? `: ${checkDetail(status.check)}` : ''}.</>}
                 </span>
               </div>
             )}

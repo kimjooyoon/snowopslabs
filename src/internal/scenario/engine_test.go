@@ -704,3 +704,12 @@ func TestActivationOutputResolvesAuthorText(t *testing.T) {
 		}
 	}
 }
+
+func TestCurrentDir_ReturnsEmptyWhenTheWorkingDirectoryIsGone(t *testing.T) {
+	old := scenarioGetwd
+	scenarioGetwd = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { scenarioGetwd = old })
+	if got := currentDir(); got != "" {
+		t.Errorf("currentDir() = %q, want empty string", got)
+	}
+}

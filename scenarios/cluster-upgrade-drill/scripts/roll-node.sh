@@ -173,6 +173,7 @@ fi
 # the ones running now: a later scenario may run another tag.
 echo "==> Re-importing locally built images onto the new node"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+. "$PROJECT_ROOT/scripts/_lib/display.sh"
 # shellcheck source=runtimes/_lib/lab-images.sh
 . "$PROJECT_ROOT/runtimes/_lib/lab-images.sh"
 LOCAL_IMAGES="$({
@@ -203,7 +204,7 @@ if [ -n "${MISSING// /}" ]; then
   printf '           %s\n' ${MISSING} >&2
   echo "         Any pod that needs one will land in ImagePullBackOff - they are lab" >&2
   echo "         builds and exist in no registry. Rebuild before rescheduling, e.g.:" >&2
-  echo "           DOCKER_IMAGE_TAG=<tag> bash ${PROJECT_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}/src/engine/build/docker.sh <app> --import" >&2
+  echo "           DOCKER_IMAGE_TAG=<tag> bash $(display_path "${PROJECT_ROOT}/src/engine/build/docker.sh") <app> --import" >&2
 fi
 
 # k3d's load balancer holds its nginx upstreams as a fixed list of node names,

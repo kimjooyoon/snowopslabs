@@ -185,6 +185,42 @@ describe('Incidents view', () => {
     expect(screen.queryByText(/Active: oom-kill/)).not.toBeInTheDocument()
   })
 
+  it('hides an unresolved silent check name and detail in the incident console', async () => {
+    const user = userEvent.setup()
+    const active = { fault: '(hidden)', injectedAt: new Date().toISOString(), silent: true, hintsRevealed: 0 }
+    const server = serveIncidents({ ...twoFaults, active })
+    server.override('GET', '/incidents/status', 200, {
+      active,
+      resolved: false,
+      check: { name: 'traffic-reaches-the-workload', pass: false, explanation: 'FAIL: default-deny-ingress' },
+    })
+
+    const { notify } = renderIncidents()
+    await user.click(await screen.findByRole('button', { name: /check if resolved/i }))
+    const shown = await screen.findByRole('status')
+    expect(shown.textContent).toContain('Not resolved yet - keep digging, or: labctl incident hint.')
+    expect(shown.textContent).not.toMatch(/traffic-reaches-the-workload|default-deny-ingress/)
+    expect(notify).toHaveBeenCalledWith('info', 'Still broken', 'Not resolved yet - keep digging, or: labctl incident hint')
+    expect(server.unanswered).toEqual([])
+  })
+
+  it('shows the detection check after a silent incident is resolved', async () => {
+    const user = userEvent.setup()
+    const active = { fault: '(hidden)', injectedAt: new Date().toISOString(), silent: true, hintsRevealed: 0 }
+    const server = serveIncidents({ ...twoFaults, active })
+    server.override('GET', '/incidents/status', 200, {
+      active,
+      resolved: true,
+      check: { name: 'traffic-reaches-the-workload', pass: true },
+    })
+
+    renderIncidents()
+    await user.click(await screen.findByRole('button', { name: /check if resolved/i }))
+    expect(await screen.findByText((_, el) =>
+      el?.classList.contains('banner-body') === true &&
+      /Detection check traffic-reaches-the-workload passes - resolved/.test(el.textContent ?? ''))).toBeInTheDocument()
+  })
+
   // Only what the user must install. The app the fault resolved from the binding
   // is what gets broken, not a prerequisite - listing it said content that runs
   // against any conforming app ran against one.

@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sagar2395/snowopslabs/internal/config"
+	"github.com/sagar2395/snowopslabs/internal/display"
 	"github.com/sagar2395/snowopslabs/internal/executor"
 	"github.com/sagar2395/snowopslabs/internal/incident"
 	"github.com/sagar2395/snowopslabs/internal/labcheck"
@@ -83,7 +84,9 @@ var rootCmd = &cobra.Command{
 		case err != nil:
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
 		case moved:
-			fmt.Fprintf(cmd.ErrOrStderr(), "Moved the lab state from %s to %s.\n", legacyState, cfg.StateDir)
+			fmt.Fprintf(cmd.ErrOrStderr(), "Moved the lab state from %s to %s.\n",
+				display.Text(legacyState, cfg.ProjectRoot, cfg.StateDir, cliCurrentDir()),
+				display.Text(cfg.StateDir, cfg.ProjectRoot, cfg.StateDir, cliCurrentDir()))
 		}
 
 		scriptExec = executor.New(cfg.ProjectRoot)

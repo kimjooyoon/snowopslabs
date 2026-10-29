@@ -92,7 +92,9 @@ func TestHandleIncidentInject_FullLoop(t *testing.T) {
 	}
 
 	// Fix manually, status flips to resolved.
-	os.Remove(filepath.Join(root, "incidents", "api-fault", "BROKEN"))
+	if err := os.Remove(filepath.Join(root, "incidents", "api-fault", "BROKEN")); err != nil {
+		t.Fatal(err)
+	}
 	w = httptest.NewRecorder()
 	s.handleIncidentStatus(w, httptest.NewRequest(http.MethodGet, "/api/incidents/status", nil))
 	if !strings.Contains(w.Body.String(), `"resolved":true`) {
@@ -161,7 +163,7 @@ func TestHandleIncidentInject_Errors(t *testing.T) {
 }
 
 func TestHandleIncidentInject_SilentHidesFault(t *testing.T) {
-	s, _ := newIncidentServer(t)
+	s, root := newIncidentServer(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/incidents/api-fault/inject?silent=true", nil)
 	req = setVars(req, map[string]string{"name": "api-fault"})
@@ -182,6 +184,20 @@ func TestHandleIncidentInject_SilentHidesFault(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "(hidden)") {
 		t.Fatalf("expected hidden marker: %s", w.Body.String())
+	}
+	for _, leak := range []string{"marker-gone", "BROKEN", "FAIL:"} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Fatalf("silent status leaked detection detail %q: %s", leak, w.Body.String())
+		}
+	}
+
+	// A passing silent check can reveal the fault because the learner has
+	// already repaired it.
+	os.Remove(filepath.Join(root, "incidents", "api-fault", "BROKEN"))
+	w = httptest.NewRecorder()
+	s.handleIncidentStatus(w, httptest.NewRequest(http.MethodGet, "/api/incidents/status", nil))
+	if !strings.Contains(w.Body.String(), `"resolved":true`) || !strings.Contains(w.Body.String(), `"name":"marker-gone"`) {
+		t.Fatalf("resolved silent status did not reveal the passing check: %s", w.Body.String())
 	}
 }
 

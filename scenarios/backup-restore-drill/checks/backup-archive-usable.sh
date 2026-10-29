@@ -9,41 +9,43 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 # shellcheck source=scripts/_backup_lib.sh
 . "${SCRIPT_DIR}/../scripts/_backup_lib.sh"
+. "${PROJECT_ROOT}/scripts/_lib/display.sh"
 
 NS="$(backup_ns "")"
 ARCHIVE="$(archive_path "$NS")"
 
 fail() {
   echo "FAIL: $1" >&2
-  echo "  Take a backup of the live namespace: bash ${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/backup.sh ${NS}" >&2
+  echo "  Take a backup of the live namespace: bash $(display_path "${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/backup.sh") ${NS}" >&2
   exit 1
 }
 
-[ -f "$ARCHIVE" ] || fail "no backup archive at ${ARCHIVE}."
+[ -f "$ARCHIVE" ] || fail "no backup archive at $(display_path "${ARCHIVE}")."
 require_jq || exit 1
 
 jq -e '.kind == "List"' "$ARCHIVE" >/dev/null 2>&1 ||
-  fail "${ARCHIVE} is not a manifest archive (expected a JSON List). An empty or truncated file restores nothing."
+  fail "$(display_path "${ARCHIVE}") is not a manifest archive (expected a JSON List). An empty or truncated file restores nothing."
 
 COUNT="$(jq '.items | length' "$ARCHIVE" 2>/dev/null || echo 0)"
-[ "${COUNT:-0}" -ge 1 ] || fail "${ARCHIVE} holds no objects, so there is nothing to restore."
+[ "${COUNT:-0}" -ge 1 ] || fail "$(display_path "${ARCHIVE}") holds no objects, so there is nothing to restore."
 
 ARCHIVED_TOKEN="$(jq -r '.items[]
   | select(.kind == "ConfigMap" and .metadata.name == "restore-marker")
   | .data.token // empty' "$ARCHIVE" 2>/dev/null | head -1)"
 
 if [ -z "$ARCHIVED_TOKEN" ]; then
-  fail "${ARCHIVE} does not contain the restore-marker ConfigMap, so it cannot prove a round-trip."
+  fail "$(display_path "${ARCHIVE}") does not contain the restore-marker ConfigMap, so it cannot prove a round-trip."
 fi
 
 LIVE_TOKEN="$(kubectl -n "$NS" get configmap restore-marker -o jsonpath='{.data.token}' 2>/dev/null || true)"
 if [ -n "$LIVE_TOKEN" ] && [ "$LIVE_TOKEN" != "$ARCHIVED_TOKEN" ]; then
   echo "FAIL: the archive holds marker token ${ARCHIVED_TOKEN}, but the live marker is ${LIVE_TOKEN}." >&2
   echo "  This archive predates the current marker - restoring it would put back the wrong value." >&2
-  echo "  Take a fresh backup: bash ${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/backup.sh ${NS}" >&2
+  echo "  Take a fresh backup: bash $(display_path "${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/backup.sh") ${NS}" >&2
   exit 1
 fi
 
-echo "OK: ${ARCHIVE} holds ${COUNT} object(s) including the restore marker (token ${ARCHIVED_TOKEN})."
+echo "OK: $(display_path "${ARCHIVE}") holds ${COUNT} object(s) including the restore marker (token ${ARCHIVED_TOKEN})."

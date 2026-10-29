@@ -10,8 +10,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 # shellcheck source=scripts/_backup_lib.sh
 . "${SCRIPT_DIR}/../scripts/_backup_lib.sh"
+. "${PROJECT_ROOT}/scripts/_lib/display.sh"
 
 NS="$(backup_ns "")"
 LOG="$(bootid_log "$NS")"
@@ -21,15 +23,15 @@ HOW=$(
   Destroy the volume and restore the objects, then re-verify:
     kubectl -n ${NS} delete deploy data-writer
     kubectl -n ${NS} delete pvc restore-data
-    bash ${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/restore.sh ${NS}
-    bash ${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/observe-pv-data.sh ${NS}
+    bash $(display_path "${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/restore.sh") ${NS}
+    bash $(display_path "${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/observe-pv-data.sh") ${NS}
 TXT
 )
 
 if [ ! -s "$LOG" ]; then
   echo "FAIL: no boot-id was recorded, so there is no 'before' to compare against." >&2
   echo "  Take the backup while the data-writer is running - that is when the fingerprint is captured:" >&2
-  echo "    bash ${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/backup.sh ${NS}" >&2
+  echo "    bash $(display_path "${PROJECT_ROOT:-.}/scenarios/backup-restore-drill/scripts/backup.sh") ${NS}" >&2
   exit 1
 fi
 

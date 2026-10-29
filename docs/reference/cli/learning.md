@@ -72,7 +72,8 @@ so a correct fix scores zero.
 challenge's faults in order; `abort`, or a passing `submit`, resolves every one.
 `hint` takes the faults' hint ladders in turn, one rung of each. A challenge with
 `silent: true` keeps its faults' names out of `info` and the API, which give
-only how many there are.
+only how many there are. A failed `submit` also reports each check as `fault N of M`
+with `not fixed yet`; after every fault passes, the result names the checks again.
 
 REST: `GET /api/v2/challenges`, `GET /api/v2/challenges/{name}`,
 `GET /api/v2/challenges/status`, `GET /api/v2/challenges/history`,
@@ -82,8 +83,10 @@ REST: `GET /api/v2/challenges`, `GET /api/v2/challenges/{name}`,
 
 `complete` is `labctl challenge submit` over HTTP. It takes no body: the server
 runs the challenge's checks against the lab and answers the scored run with
-`passed` and the result of each check in `checks`. A pass is recorded for the
-signed-in user, ends the run and undoes the setup; `cleanupWarning` is set if
-the setup could not be undone. A fail scores the attempt and leaves the run
-going. It answers `409 no_active_challenge` when no challenge is running and
-`409 no_checks` when the challenge's grading resolves to no checks.
+`passed` and the result of each check in `checks`. For a failed silent challenge,
+the check names and messages are replaced with `fault N of M` and `not fixed yet`.
+A pass is recorded for the signed-in user, ends the run and undoes the setup;
+`cleanupWarning` is set if the setup could not be undone. A fail scores the
+attempt and leaves the run going. It answers `409 no_active_challenge` when no
+challenge is running and `409 no_checks` when the challenge's grading resolves
+to no checks.

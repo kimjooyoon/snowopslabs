@@ -21,6 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/sagar2395/snowopslabs/internal/config"
+	"github.com/sagar2395/snowopslabs/internal/display"
 	"github.com/sagar2395/snowopslabs/internal/executor"
 	"github.com/sagar2395/snowopslabs/internal/snippet"
 	"github.com/sagar2395/snowopslabs/internal/tmpl"
@@ -728,7 +729,8 @@ func (e *Engine) resolveCheck(c checks.Check) checks.Check {
 // such as references and snippets, like the scenario engine's method of the
 // same name.
 func (e *Engine) ResolveTemplate(input string) string {
-	return e.resolveTemplate(input)
+	current, _ := os.Getwd() // display only: no directory just means no clone-relative form
+	return display.Text(e.resolveTemplate(input), e.ProjectRoot, e.StateRoot, current)
 }
 
 func (e *Engine) resolveTemplate(input string) string {

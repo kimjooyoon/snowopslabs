@@ -23,13 +23,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LAB_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 # shellcheck source=scripts/_backup_lib.sh
 . "${SCRIPT_DIR}/_backup_lib.sh"
+. "${LAB_ROOT}/scripts/_lib/display.sh"
 
 NS="$(backup_ns "${1:-}")"
 ARCHIVE="${2:-$(archive_path "$NS")}"
 
 if [ ! -f "$ARCHIVE" ]; then
-  echo "ERROR: backup archive not found: ${ARCHIVE}" >&2
-  echo "       Create one first: bash ${LAB_ROOT}/scenarios/backup-restore-drill/scripts/backup.sh ${NS}" >&2
+  echo "ERROR: backup archive not found: $(display_path "${ARCHIVE}")" >&2
+  echo "       Create one first: bash $(display_path "${LAB_ROOT}/scenarios/backup-restore-drill/scripts/backup.sh") ${NS}" >&2
   exit 1
 fi
 
@@ -44,7 +45,7 @@ if ! kubectl get namespace "$NS" >/dev/null 2>&1; then
   kubectl create namespace "$NS"
 fi
 
-echo "==> Restoring '${NS}' from ${ARCHIVE} (${OBJECTS} object(s))"
+echo "==> Restoring '${NS}' from $(display_path "${ARCHIVE}") (${OBJECTS} object(s))"
 # Server-side apply keeps the output clean (no last-applied-configuration
 # warnings) and converges cleanly whether the namespace is fresh or drifted.
 kubectl apply --server-side --force-conflicts -n "$NS" -f "$ARCHIVE"

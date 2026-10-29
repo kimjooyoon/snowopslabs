@@ -3,6 +3,8 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sagar2395/snowopslabs/internal/labtest"
 )
 
 // TestMainStaysTrivial guards ADR-0005's entrypoint rule.
@@ -170,6 +174,34 @@ func TestRoot_UsageIsShownOnlyForUsageMistakes(t *testing.T) {
 				t.Errorf("stderr does not show the usage %q:\n%s", tt.wantUsage, r.stderr)
 			}
 		})
+	}
+}
+
+func TestRoot_MigratesLegacyStateWithReadablePaths(t *testing.T) {
+	l := labtest.New(t)
+	l.Write(t, ".labctl/marker", "legacy")
+	t.Chdir(l.Root)
+	t.Setenv("SNOWOPS_HOME", filepath.Join(os.Getenv("HOME"), ".snowops"))
+
+	var stdout, stderr bytes.Buffer
+	oldOut, oldErr, oldArgs := rootCmd.OutOrStdout(), rootCmd.ErrOrStderr(), rootCmd.Flag("project-dir").Value.String()
+	t.Cleanup(func() {
+		rootCmd.SetOut(oldOut)
+		rootCmd.SetErr(oldErr)
+		_ = rootCmd.Flag("project-dir").Value.Set(oldArgs)
+	})
+	resetCommands(context.Background(), rootCmd)
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{"--project-dir", l.Root, "scenario", "list"})
+	if err := rootCmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("scenario list: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Moved the lab state from .labctl to ") {
+		t.Fatalf("migration warning missing:\n%s", stderr.String())
+	}
+	if strings.Contains(stderr.String(), l.Root) || strings.Contains(stderr.String(), l.Home) {
+		t.Errorf("migration warning leaked an account-specific path:\n%s", stderr.String())
 	}
 }
 

@@ -2,8 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 # shellcheck source=checks/_drill.sh
 . "${SCRIPT_DIR}/_drill.sh"
+. "$PROJECT_ROOT/scripts/_lib/display.sh"
 
 # A cluster nobody has touched passes every version test there is: one distinct
 # version across every node is what "finished" and "never started" both look
@@ -22,7 +24,7 @@ if [ -n "${REMAINING// /}" ]; then
   printf '  %s\n' ${REMAINING} >&2
   echo "  Roll each of them, one at a time - cordon, drain, then replace:" >&2
   echo "    kubectl cordon <node> && kubectl drain <node> --ignore-daemonsets --delete-emptydir-data" >&2
-  echo "    TARGET_K3S_VERSION=<tag> bash ${PROJECT_ROOT:-.}/scenarios/cluster-upgrade-drill/scripts/roll-node.sh <node>" >&2
+  echo "    TARGET_K3S_VERSION=<tag> bash $(display_path "${PROJECT_ROOT:-.}/scenarios/cluster-upgrade-drill/scripts/roll-node.sh") <node>" >&2
   exit 1
 fi
 

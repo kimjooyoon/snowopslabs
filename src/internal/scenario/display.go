@@ -5,6 +5,7 @@ package scenario
 import (
 	"maps"
 
+	"github.com/sagar2395/snowopslabs/internal/display"
 	"github.com/sagar2395/snowopslabs/internal/snippet"
 	"github.com/sagar2395/snowopslabs/internal/tmpl"
 	"github.com/sagar2395/snowopslabs/internal/workload"
@@ -23,7 +24,9 @@ func (e *Engine) ResolvedForDisplay(s *Scenario, params map[string]string, bound
 	overlay := make(map[string]string, len(e.resolvedParams)+len(params))
 	maps.Copy(overlay, e.resolvedParams)
 	maps.Copy(overlay, params)
-	resolve := func(in string) string { return tmpl.Expand(in, ctx, overlay) }
+	resolve := func(in string) string {
+		return display.Text(tmpl.Expand(in, ctx, overlay), e.ProjectRoot, e.StateRoot, e.ProjectRoot)
+	}
 	each := func(in []string) []string {
 		if in == nil {
 			return nil
