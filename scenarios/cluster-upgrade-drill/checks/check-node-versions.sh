@@ -30,7 +30,9 @@ fi
 
 mark_roll_started >/dev/null
 
-VERSIONS="$(kubectl get nodes \
+# Only the workers are graded: the drill never rolls the control plane, so it
+# keeps the version it started on while the workers move to the target.
+VERSIONS="$(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' \
   -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.nodeInfo.kubeletVersion}{"\n"}{end}' \
   2>/dev/null || true)"
 
@@ -43,8 +45,9 @@ DISTINCT="$(echo "$VERSIONS" | awk '{print $2}' | sort -u)"
 COUNT="$(echo "$DISTINCT" | grep -c . || true)"
 
 if [ "${COUNT:-0}" -gt 1 ]; then
-  echo "FAIL: the cluster is running mixed kubelet versions - the roll is unfinished:" >&2
+  echo "FAIL: the workers are running mixed kubelet versions - the roll is unfinished:" >&2
   echo "$VERSIONS" >&2
+  echo "  Roll each worker that is not on your target version onto it." >&2
   exit 1
 fi
 
@@ -52,12 +55,14 @@ if [ -n "${TARGET_K3S_VERSION:-}" ]; then
   # kubeletVersion renders as v1.33.6+k3s1 where the image tag is v1.33.6-k3s1.
   WANT="$(echo "$TARGET_K3S_VERSION" | tr '-' '+')"
   if [ "$DISTINCT" != "$WANT" ]; then
-    echo "FAIL: nodes report ${DISTINCT}, but TARGET_K3S_VERSION asks for ${WANT}." >&2
+    echo "FAIL: the workers report ${DISTINCT}, but TARGET_K3S_VERSION asks for ${WANT}." >&2
     exit 1
   fi
-  echo "OK: every node is on ${DISTINCT} (matches TARGET_K3S_VERSION)."
+  echo "OK: every worker is on ${DISTINCT} (matches TARGET_K3S_VERSION)."
   exit 0
 fi
 
-echo "OK: every worker the drill started with has been replaced, and every node is"
-echo "now on ${DISTINCT} - no node left behind."
+SERVER="$(kubectl get nodes -l node-role.kubernetes.io/control-plane \
+  -o jsonpath='{.items[0].status.nodeInfo.kubeletVersion}' 2>/dev/null || true)"
+echo "OK: every worker the drill started with has been replaced, and every worker is"
+echo "now on ${DISTINCT} - no node left behind. The control plane stays on ${SERVER:-its own version}."

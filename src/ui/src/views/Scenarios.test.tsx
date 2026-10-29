@@ -48,12 +48,13 @@ function renderScenarios() {
   // assert the preview and fire the confirm ourselves.
   let captured: ConfirmRequest | null = null
   const requestConfirm = (r: ConfirmRequest) => { captured = r }
+  const notify = vi.fn()
   render(
     <QueryClientProvider client={client}>
-      <Scenarios notify={vi.fn()} requestConfirm={requestConfirm} />
+      <Scenarios notify={notify} requestConfirm={requestConfirm} />
     </QueryClientProvider>,
   )
-  return { getConfirm: () => captured }
+  return { getConfirm: () => captured, notify }
 }
 
 describe('Scenarios view - activation preview', () => {
@@ -337,6 +338,26 @@ describe('Scenarios view - verify', () => {
     expect(screen.getByText('app-synced')).toBeInTheDocument()
     expect(screen.getByText('PASS')).toBeInTheDocument()
     expect(screen.getByText('FAIL')).toBeInTheDocument()
+  })
+
+  it('names the failing checks in the notification, not just how many', async () => {
+    const user = userEvent.setup()
+    serveScenarios([active])
+    server.override('POST', '/scenarios/gitops-cicd/verify', 200, {
+      scenario: 'gitops-cicd',
+      passed: false,
+      results: [
+        { name: 'argocd-ready', type: 'kubectl', pass: true, got: '1', want: '>= 1' },
+        { name: 'app-synced', type: 'kubectl', pass: false, got: '0', want: '>= 1' },
+        { name: 'drift-healed', type: 'script', pass: false, got: '', want: '' },
+      ],
+    })
+
+    const { notify } = renderScenarios()
+    await user.click(await screen.findByRole('button', { name: /verify/i }))
+    await waitFor(() => expect(notify).toHaveBeenCalledWith(
+      'info', '2 of 3 checks failing', expect.stringMatching(/^Failing: app-synced, drift-healed\./),
+    ))
   })
 
   it('says the scenario is in its expected state when every check passes', async () => {
