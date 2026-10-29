@@ -105,7 +105,8 @@ case "$*" in
   *"get deploy"*"livenessProbe.httpGet.scheme}"*) printf 'HTTP' ;;
   *"get deploy"*"livenessProbe}"*) printf '%s' "${LIVENESS_PROBE-$healthy_probe}" ;;
   *"get deploy"*'ports[?(@.name=="http")].containerPort}'*) printf '8080' ;;
-  *"get pods"*"status.phase=Running"*) printf 'cart-abc' ;;
+  *"get pods"*"status.phase=Running"*) printf '%s' "${RUNNING_PODS-cart-abc}" ;;
+  *"get --raw"*"pods/cart-old:"*"/proxy/ready"*) printf '{"status":"ready"}' ;;
   *"get --raw"*"/proxy/ready"*)
     [ "${POD_GET:-ok}" = ok ] || exit 1
     printf '%s' "${READY_BODY-{\"status\":\"ready\",\"upstream\":\"ok\"\}}"
@@ -1133,6 +1134,14 @@ upstream=http://echo-server.echo-server.svc.cluster.local:8080/
   [[ "$output" == *"labctl app build cart && labctl app deploy cart"* ]] || false
   assert_called kubectl "delete networkpolicy default-deny-egress -n shop --ignore-not-found"
   assert_called kubectl "delete configmap labfault-dns-egress-blocked"
+}
+
+@test "dns-egress-blocked: inject asks a new pod, not one still terminating after the rollout" {
+  RUNNING_PODS="cart-old 2026-10-29T10:29:20Z
+cart-abc " inject dns-egress-blocked
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"predates UPSTREAM_URL"* ]] || false
+  assert_called kubectl "get --raw /api/v1/namespaces/shop/pods/cart-abc:8080/proxy/ready"
 }
 
 @test "dns-egress-blocked: a second inject changes nothing" {
