@@ -27,6 +27,22 @@ colleague: direct, specific, a little informal, never selling.
 - **Mark what is not built.** Anything planned says **Planned**. Never
   describe an intention as if it ships.
 
+## Write about the project, not the occasion
+
+Everything in this repository and its GitHub tracker (docs, content text,
+comments, commit messages, issues and pull requests) describes SnowOps Labs
+itself: what happens, how to reproduce it, what changes and why the product
+needs it. It never says what outside work the writer was doing, or what outside
+work a change is for.
+
+- **State the problem in the project's terms.** "On v1.9.0, `scenario verify`
+  stays at 1 of 8 checks failing after a clean roll", not "while preparing
+  material for X, verify kept failing".
+- **Justify a change by what it does for a lab user**, never by an external
+  plan, audience, deadline or side project.
+- **Keep the reproduction, drop the backstory.** Version, commands, observed
+  output and expected output are what a reader needs.
+
 ## Punctuation and formatting
 
 - **No em dashes.** Use a comma, a colon, parentheses or a plain " - ". The

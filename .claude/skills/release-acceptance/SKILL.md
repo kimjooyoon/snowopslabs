@@ -73,7 +73,9 @@ before moving on, and confirm with `labctl status`.
   its test and docs (CLAUDE.md rules apply), then re-run the failing step with
   `--only` and the change-walk check.
 - Anything out of scope: a GitHub issue with the reproduction (`gh issue create`,
-  labelled by area).
+  labelled by area). The issue describes the project only: version, commands,
+  what happened and what was expected, never the outside work that surfaced it
+  ([WRITING](../../../docs/WRITING.md#write-about-the-project-not-the-occasion)).
 - Never weaken a check to make it pass.
 
 ## 6. Report
