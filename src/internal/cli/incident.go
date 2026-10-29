@@ -187,15 +187,7 @@ var incidentStatusCmd = &cobra.Command{
 			time.Since(res.Active.InjectedAt).Round(time.Second))
 
 		if res.Alert != nil {
-			switch {
-			case res.Alert.Error != "":
-				fmt.Printf("Alert:     %s - could not query Alertmanager (%s)\n", res.Alert.Expected, res.Alert.Error)
-			case res.Alert.Fired:
-				fmt.Printf("Alert:     %s FIRING since %s - the page went out\n",
-					res.Alert.Expected, res.Alert.Since.Format(time.RFC3339))
-			default:
-				fmt.Printf("Alert:     %s not firing (rules evaluate within ~1-2 minutes of injection)\n", res.Alert.Expected)
-			}
+			printIncidentAlertStatus(cmd.OutOrStdout(), res.Alert, res.Active.Silent && !res.Resolved)
 		}
 
 		if res.Resolved {
@@ -203,6 +195,10 @@ var incidentStatusCmd = &cobra.Command{
 			fmt.Printf("It was: %s - %s\n", res.Fault.Name, res.Fault.DisplayName)
 			printSignupNudge(os.Stdout)
 			tidyAfterFix(cmd, res.Fault.Name, incsvc.Target(incEng.ResolvedTarget(res.Fault)))
+			return nil
+		}
+		if res.Active.Silent {
+			fmt.Println("\nNOT RESOLVED - keep digging, or: labctl incident hint")
 			return nil
 		}
 		detail := res.Check.Error
@@ -213,6 +209,27 @@ var incidentStatusCmd = &cobra.Command{
 		fmt.Println("Keep digging, or: labctl incident hint")
 		return nil
 	},
+}
+
+func printIncidentAlertStatus(w io.Writer, alert *incident.AlertStatus, hidden bool) {
+	if hidden && !alert.Fired {
+		if alert.Error != "" {
+			fmt.Fprintf(w, "Alert:     not available yet - could not query Alertmanager (%s)\n", alert.Error)
+			return
+		}
+		fmt.Fprintln(w, "Alert:     not firing yet (rules evaluate within ~1-2 minutes of injection)")
+		return
+	}
+
+	switch {
+	case alert.Error != "":
+		fmt.Fprintf(w, "Alert:     %s - could not query Alertmanager (%s)\n", alert.Expected, alert.Error)
+	case alert.Fired:
+		fmt.Fprintf(w, "Alert:     %s FIRING since %s - the page went out\n",
+			alert.Expected, alert.Since.Format(time.RFC3339))
+	default:
+		fmt.Fprintf(w, "Alert:     %s not firing (rules evaluate within ~1-2 minutes of injection)\n", alert.Expected)
+	}
 }
 
 // tidyAfterFix runs a fault's resolve.sh once a hand fix passes, removing the armed

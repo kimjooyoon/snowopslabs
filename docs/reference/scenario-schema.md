@@ -412,8 +412,8 @@ URLs, commands, namespaces, snippets and manifests are Go templates.
 | `{{.DomainSuffix}}` | `snowops.localhost` | Ingress domain suffix from the active runtime. Use it for **hostnames** (an Ingress `host:`), never in a URL. |
 | `{{.IngressURLSuffix}}` | `snowops.localhost` or `snowops.localhost:8080` | The domain suffix plus the ingress port when it is not 80 (the runtime falls back when 80 is busy). Build every **URL** from it: `http://grafana.{{.IngressURLSuffix}}`. `labctl validate` rejects a URL built from `{{.DomainSuffix}}`. |
 | `{{.MonitoringNamespace}}` | `monitoring` | Where the monitoring stack lives |
-| `{{.ProjectRoot}}` | `/home/me/snowopslabs` | Absolute path to the learner's clone. Commands a learner copies (hints, explore commands, remediations) name repo files through it, so they work from any directory. |
-| `{{.StateDir}}` | `/home/me/.snowops/state/snowops` | The lab state directory, for files that belong to the running lab rather than the clone (e.g. backup archives). Scripts get it as `LAB_STATE_DIR`. |
+| `{{.ProjectRoot}}` | `/home/me/snowopslabs` | Absolute path to the learner's clone for execution. Learner-facing commands shorten it to a clone-relative path at the clone root, or a `~` path elsewhere. |
+| `{{.StateDir}}` | `/home/me/.snowops/state/snowops` | The lab state directory, for files that belong to the running lab rather than the clone (e.g. backup archives). Scripts get it as `LAB_STATE_DIR`; learner-facing text shortens home paths to `~`. |
 | `{{.LokiRetentionPeriod}}` | `72h` | Loki's configured retention |
 | `{{.IngressClass}}` | `traefik` | Ingress class for scenario Ingress manifests |
 | `{{.WorkloadName}}` | `go-api` | The bound app's name, and its Deployment name |

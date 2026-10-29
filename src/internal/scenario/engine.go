@@ -24,6 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/sagar2395/snowopslabs/internal/config"
+	"github.com/sagar2395/snowopslabs/internal/display"
 	"github.com/sagar2395/snowopslabs/internal/snippet"
 	"github.com/sagar2395/snowopslabs/internal/tmpl"
 	"github.com/sagar2395/snowopslabs/internal/workload"
@@ -1403,7 +1404,7 @@ func (e *Engine) printExploreHints(s *Scenario) {
 	if len(s.Explore.URLs) > 0 {
 		fmt.Fprintln(e.output(), "\nURLs:")
 		for _, u := range s.Explore.URLs {
-			resolved := e.resolveTemplate(u.URL)
+			resolved := display.Text(e.resolveTemplate(u.URL), e.ProjectRoot, e.StateRoot, currentDir())
 			fmt.Fprintf(e.output(), "  %-30s %s\n", e.resolveTemplate(u.Label)+":", resolved)
 		}
 	}
@@ -1411,7 +1412,7 @@ func (e *Engine) printExploreHints(s *Scenario) {
 	if len(s.Explore.Commands) > 0 {
 		fmt.Fprintln(e.output(), "\nCommands to try:")
 		for _, c := range s.Explore.Commands {
-			resolved := e.resolveTemplate(c.Command)
+			resolved := display.Text(e.resolveTemplate(c.Command), e.ProjectRoot, e.StateRoot, currentDir())
 			fmt.Fprintf(e.output(), "  %s:\n    %s\n", e.resolveTemplate(c.Label), resolved)
 		}
 	}
@@ -1419,12 +1420,22 @@ func (e *Engine) printExploreHints(s *Scenario) {
 	if len(s.Explore.Tips) > 0 {
 		fmt.Fprintln(e.output(), "\nTips:")
 		for _, t := range s.Explore.Tips {
-			fmt.Fprintf(e.output(), "  - %s\n", e.resolveTemplate(t))
+			fmt.Fprintf(e.output(), "  - %s\n", display.Text(e.resolveTemplate(t), e.ProjectRoot, e.StateRoot, currentDir()))
 		}
 	}
 
 	fmt.Fprintln(e.output())
 }
+
+func currentDir() string {
+	dir, err := scenarioGetwd()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+var scenarioGetwd = os.Getwd
 
 func indentJSON(s, prefix string) string {
 	var result strings.Builder

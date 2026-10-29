@@ -62,7 +62,7 @@ render_targeted "$SCRIPT_DIR/alerts/rule.yaml" |
 
 fault_state_save "$FAULT" "pod=$POD"
 
-echo "Starting a diagnostic pod in $NS..."
+echo "Injecting the fault into $NS..."
 kubectl -n "$NS" run "$POD" \
   --image="$IMAGE" \
   --image-pull-policy=IfNotPresent \

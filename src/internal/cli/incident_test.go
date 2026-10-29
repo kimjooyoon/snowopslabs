@@ -10,10 +10,100 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sagar2395/snowopslabs/internal/config"
+	"github.com/sagar2395/snowopslabs/internal/executor"
+	"github.com/sagar2395/snowopslabs/internal/incident"
 	"github.com/sagar2395/snowopslabs/internal/labtest"
+	"github.com/sagar2395/snowopslabs/internal/scenario"
 	incsvc "github.com/sagar2395/snowopslabs/internal/service/incident"
 	"github.com/sagar2395/snowopslabs/internal/store"
+	"github.com/sagar2395/snowopslabs/internal/workload"
 )
+
+func TestPrintIncidentAlertStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		hidden     bool
+		fired      bool
+		err        string
+		want       string
+		notContain string
+	}{
+		{
+			name:  "visible alert that is not firing",
+			want:  "Alert:     LabFaultPodRestarting not firing",
+			fired: false,
+		},
+		{
+			name: "visible alert query failure",
+			err:  "connection refused",
+			want: "Alert:     LabFaultPodRestarting - could not query Alertmanager (connection refused)",
+		},
+		{
+			name:       "hidden alert that is not firing",
+			hidden:     true,
+			notContain: "LabFaultPodRestarting",
+			want:       "Alert:     not firing yet (rules evaluate within ~1-2 minutes of injection)",
+		},
+		{
+			name:   "hidden alert that is firing",
+			hidden: true,
+			fired:  true,
+			want:   "Alert:     LabFaultPodRestarting FIRING",
+		},
+		{
+			name:       "hidden alert query failure",
+			hidden:     true,
+			err:        "connection refused",
+			notContain: "LabFaultPodRestarting",
+			want:       "Alert:     not available yet - could not query Alertmanager (connection refused)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			printIncidentAlertStatus(&out, &incident.AlertStatus{
+				Expected: "LabFaultPodRestarting",
+				Fired:    tt.fired,
+				Error:    tt.err,
+			}, tt.hidden)
+			got := out.String()
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("output = %q, want it to contain %q", got, tt.want)
+			}
+			if tt.notContain != "" && strings.Contains(got, tt.notContain) {
+				t.Fatalf("output = %q, must not contain %q", got, tt.notContain)
+			}
+		})
+	}
+}
+
+func TestIncidentStatus_PrintsAlertStatus(t *testing.T) {
+	l := labtest.New(t)
+	l.Write(t, "incidents/"+labtest.Fault+"/fault.yaml", strings.ReplaceAll(readFixtureFromLab(t, l, "incidents/"+labtest.Fault+"/fault.yaml"), "severity: low", "severity: low\nexpectAlert: LabFaultDemo"))
+	l.Write(t, "incidents/"+labtest.Fault+"/alerts/rule.yaml", "# rule with alert: LabFaultDemo\n")
+
+	oldCfg, oldScenes, oldInc := cfg, scenes, incEng
+	t.Cleanup(func() { cfg, scenes, incEng = oldCfg, oldScenes, oldInc })
+	cfg = &config.Config{ProjectRoot: l.Root, StateDir: filepath.Join(l.Home, "state", "clitest"), DomainSuffix: "clitest"}
+	scenes = scenario.NewEngine(l.Root, cfg.DomainSuffix, "k3d")
+	scenes.Workload = workload.Default(labtest.App)
+	incEng = incident.NewEngine(l.Root, cfg.DomainSuffix)
+	incEng.StateRoot = cfg.StateDir
+	incEng.Workload = scenes.Workload
+	if _, err := incEng.Inject(labtest.Fault, executor.New(l.Root), false, false); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+
+	var out bytes.Buffer
+	cmd := dummyCmd(&out)
+	if err := incidentStatusCmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(out.String(), "Alert:     LabFaultDemo - could not query Alertmanager") {
+		t.Fatalf("status did not print the alert state:\n%s", out.String())
+	}
+}
 
 func TestTidyAfterFix(t *testing.T) {
 	tests := []struct {
@@ -137,7 +227,16 @@ func TestIncident_SilentModeNeverNamesTheFault(t *testing.T) {
 		t.Fatal("no fault was injected")
 	}
 
-	hidden := []cliResult{inject, l.mustRun("incident", "status"), l.mustRun("incident", "list"), l.mustRun("incident", "hint")}
+	status := l.mustRun("incident", "status")
+	if !strings.Contains(status.stdout, "NOT RESOLVED - keep digging, or: labctl incident hint") {
+		t.Errorf("silent status does not give generic recovery advice:\n%s", status.stdout)
+	}
+	for _, leak := range []string{"marker-gone", "BROKEN", "FAIL:"} {
+		if strings.Contains(status.stdout, leak) {
+			t.Errorf("silent status leaks detection detail %q:\n%s", leak, status.stdout)
+		}
+	}
+	hidden := []cliResult{inject, status, l.mustRun("incident", "list"), l.mustRun("incident", "hint")}
 	for _, r := range hidden {
 		out := r.stdout + r.stderr
 		if strings.Contains(out, injected+" started") || strings.Contains(out, "incident.inject "+injected) {
@@ -169,6 +268,15 @@ func TestIncident_SilentModeNeverNamesTheFault(t *testing.T) {
 }
 
 func readFixture(t *testing.T, l *terminal, rel string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(l.Root, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func readFixtureFromLab(t *testing.T, l *labtest.Lab, rel string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(l.Root, rel))
 	if err != nil {

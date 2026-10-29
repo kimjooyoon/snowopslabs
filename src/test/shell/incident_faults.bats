@@ -203,6 +203,13 @@ line_of() {
   done < <(faults)
 }
 
+@test "stray-pod-behind-service: inject output does not name the mechanism" {
+  inject stray-pod-behind-service
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Injecting the fault into shop..."* ]] || false
+  [[ "$output" != *"diagnostic pod"* ]] || false
+}
+
 @test "inject writes no annotation, label or labfault name on the workload's objects" {
   while IFS='|' read -r fault _; do
     reset_calls

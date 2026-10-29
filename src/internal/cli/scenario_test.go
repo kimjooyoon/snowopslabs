@@ -245,6 +245,15 @@ func TestScenario_New(t *testing.T) {
 	l.mustRun("scenario", "new", "my-drill", "--force")
 }
 
+func TestCLICurrentDir_ReturnsEmptyWhenTheWorkingDirectoryIsGone(t *testing.T) {
+	old := cliGetwd
+	cliGetwd = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { cliGetwd = old })
+	if got := cliCurrentDir(); got != "" {
+		t.Errorf("cliCurrentDir() = %q, want empty string", got)
+	}
+}
+
 // `scenario render` prints a scenario file as the engine would apply it.
 func TestScenario_Render(t *testing.T) {
 	l := newTerminal(t)

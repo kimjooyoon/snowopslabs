@@ -97,6 +97,29 @@ func TestResolvedForDisplayRendersSnippetFilesForTheBinding(t *testing.T) {
 	}
 }
 
+func TestResolvedForDisplayShortensLearnerPaths(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "snowops")
+	t.Setenv("HOME", home)
+	e := NewEngine(root, "k3d.local", "k3d")
+	e.StateRoot = filepath.Join(home, ".snowops", "state", "snowops")
+	s := &Scenario{
+		Name:   "demo",
+		Checks: []checks.Check{{Remediation: "bash {{.ProjectRoot}}/scenarios/demo/restore.sh"}},
+		Explore: Explore{
+			Commands: []ExploreCommand{{Command: "jq . {{.StateDir}}/backups/latest.json"}},
+		},
+	}
+
+	got := e.ResolvedForDisplay(s, nil, workload.Default("go-api"))
+	if got.Checks[0].Remediation != "bash scenarios/demo/restore.sh" {
+		t.Errorf("remediation = %q", got.Checks[0].Remediation)
+	}
+	if got.Explore.Commands[0].Command != "jq . ~/.snowops/state/snowops/backups/latest.json" {
+		t.Errorf("explore command = %q", got.Explore.Commands[0].Command)
+	}
+}
+
 func TestRenderFile(t *testing.T) {
 	e := NewEngine(t.TempDir(), "k3d.local", "k3d")
 	e.Workload = workload.Default("echo-server")

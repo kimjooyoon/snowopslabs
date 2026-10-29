@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sagar2395/snowopslabs/internal/checkfixture"
+	"github.com/sagar2395/snowopslabs/internal/display"
 	"github.com/sagar2395/snowopslabs/internal/labcheck"
 	resultspkg "github.com/sagar2395/snowopslabs/internal/results"
 	"github.com/sagar2395/snowopslabs/internal/scaffold"
@@ -28,6 +29,8 @@ var scenarioUpForce bool
 var scenarioDeployPrereqs bool
 var scenarioUpParams map[string]string
 
+var cliGetwd = os.Getwd
+
 var scenarioNewCmd = &cobra.Command{
 	Use:   "new <name>",
 	Short: "Scaffold a new scenario (valid + verify-ready)",
@@ -40,8 +43,9 @@ there. The file carries a $schema modeline for inline editor validation.`,
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Created %s\n", dir)
-		fmt.Printf("\nNext:\n  labctl scenario verify %s\n  $EDITOR %s\n", args[0], dir+"/scenario.yaml")
+		displayDir := display.Text(dir, cfg.ProjectRoot, cfg.StateDir, cliCurrentDir())
+		fmt.Printf("Created %s\n", displayDir)
+		fmt.Printf("\nNext:\n  labctl scenario verify %s\n  $EDITOR %s\n", args[0], display.Text(dir+"/scenario.yaml", cfg.ProjectRoot, cfg.StateDir, cliCurrentDir()))
 		return nil
 	},
 }
@@ -343,6 +347,7 @@ func recordScenarioVerify(name string, results []checks.Result, startedAt time.T
 func checkOutcomes(results []checks.Result) []resultspkg.CheckOutcome {
 	out := make([]resultspkg.CheckOutcome, 0, len(results))
 	for _, r := range results {
+		r.Error = display.Text(r.Error, cfg.ProjectRoot, cfg.StateDir, cliCurrentDir())
 		detail := r.Error
 		if detail == "" && !r.Pass {
 			detail = fmt.Sprintf("got %s, want %s", orDash(r.Got), orDash(r.Want))
@@ -423,7 +428,7 @@ func printVerifyRemediation(results []checks.Result) {
 			continue
 		}
 		if r.Remediation != "" {
-			steps = append(steps, fmt.Sprintf("  → %s: %s", r.Name, r.Remediation))
+			steps = append(steps, fmt.Sprintf("  → %s: %s", r.Name, display.Text(r.Remediation, cfg.ProjectRoot, cfg.StateDir, cliCurrentDir())))
 			continue
 		}
 		if !r.Pending {
@@ -440,6 +445,14 @@ func printVerifyRemediation(results []checks.Result) {
 		fmt.Fprintln(os.Stderr, "\nA check with no fix-it hint failed - a pod may still be starting.")
 		fmt.Fprintln(os.Stderr, "Re-run with --watch to wait, or inspect with: kubectl get pods -A")
 	}
+}
+
+func cliCurrentDir() string {
+	dir, err := cliGetwd()
+	if err != nil {
+		return ""
+	}
+	return dir
 }
 
 // bindForScenario binds a read-only command to the app it describes: the one
@@ -493,7 +506,9 @@ var scenarioInfoCmd = &cobra.Command{
 
 		// Expand with the scenario's parameter defaults, as the API does.
 		defaults := scenes.ParamDefaults(s)
-		resolve := func(in string) string { return scenes.ResolveTemplateWithParams(in, defaults) }
+		resolve := func(in string) string {
+			return display.Text(scenes.ResolveTemplateWithParams(in, defaults), cfg.ProjectRoot, cfg.StateDir, cliCurrentDir())
+		}
 
 		fmt.Printf("Name:        %s\n", s.Name)
 		fmt.Printf("Display:     %s\n", s.DisplayName)

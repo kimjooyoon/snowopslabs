@@ -16,8 +16,10 @@ set -eu
 # begins at the roll rather than an arbitrary ten minutes ago.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 # shellcheck source=checks/_drill.sh
 . "${SCRIPT_DIR}/_drill.sh"
+. "$PROJECT_ROOT/scripts/_lib/display.sh"
 
 WORKLOAD="${WORKLOAD_NAME}"
 METRIC="${WORKLOAD_METRIC:-http_server_request_duration_seconds}"
@@ -85,7 +87,7 @@ RATIO="$(promq "sum(rate(${METRIC}_count{app=\"${WORKLOAD}\",http_response_statu
 if [ -z "$RATIO" ]; then
   echo "FAIL: Prometheus returned no availability figure for ${WORKLOAD}." >&2
   echo "  If Prometheus itself lost its volume to the roll, release the dead claims first:" >&2
-  echo "    bash ${PROJECT_ROOT:-.}/scenarios/cluster-upgrade-drill/scripts/reclaim-stranded-pvcs.sh" >&2
+  echo "    bash $(display_path "${PROJECT_ROOT:-.}/scenarios/cluster-upgrade-drill/scripts/reclaim-stranded-pvcs.sh")" >&2
   exit 1
 fi
 

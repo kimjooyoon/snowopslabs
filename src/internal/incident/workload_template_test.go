@@ -3,10 +3,23 @@
 package incident
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/sagar2395/snowopslabs/internal/workload"
 )
+
+func TestResolveTemplateShortensLearnerPaths(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "snowops")
+	t.Setenv("HOME", home)
+	e := &Engine{ProjectRoot: root, StateRoot: filepath.Join(home, ".snowops", "state", "lab")}
+	got := e.ResolveTemplate("bash {{.ProjectRoot}}/incidents/demo/resolve.sh and {{.StateDir}}/history/results.jsonl")
+	want := "bash ~/snowops/incidents/demo/resolve.sh and ~/.snowops/state/lab/history/results.jsonl"
+	if got != want {
+		t.Errorf("ResolveTemplate() = %q, want %q", got, want)
+	}
+}
 
 // A fault whose target reads the binding follows it; one that pins a literal
 // keeps breaking exactly the workload it names.
