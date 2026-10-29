@@ -610,6 +610,18 @@ opened='["Ingress"]|[{"from":[{"namespaceSelector":{}}]}]'
   assert_called kubectl "-n shop rollout restart deploy/cart"
 }
 
+# The lab's traffic generator calls the workload's Service directly, so its
+# requests never reach the ingress: the page has to fire on what k6 sees too.
+@test "network-blackhole: the page fires on the load generator's failures as well as the ingress's" {
+  inject network-blackhole
+  [ "$status" -eq 0 ]
+  rule="$STUB_DIR/applied-monitoring.yaml"
+  grep -q 'alert: LabFaultIngressErrors' "$rule"
+  grep -qF 'traefik_service_requests_total{service=~"shop-cart-.*",code=~"5.."}' "$rule"
+  grep -qF 'k6_http_reqs_total{url=~"https?://cart\\..*",expected_response="false"}' "$rule"
+  ! grep -q 'TARGET_' "$rule"
+}
+
 @test "network-blackhole: a second inject changes nothing" {
   BLACKHOLE_POLICY="$deny_all" inject network-blackhole
   [ "$status" -eq 0 ]
