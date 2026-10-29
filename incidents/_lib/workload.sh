@@ -35,10 +35,13 @@ container_port() {
   esac
 }
 
-# running_pod <namespace> <selector> - print the name of one Running pod.
+# running_pod <namespace> <selector> - print the name of one Running pod that
+# is not being deleted. A terminating pod stays Running until it exits, so just
+# after a rollout the first Running pod can be an old one on its way out.
 running_pod() {
   kubectl -n "$1" get pods -l "$2" --field-selector=status.phase=Running \
-    -o 'jsonpath={.items[0].metadata.name}' 2>/dev/null || true
+    -o 'jsonpath={range .items[*]}{.metadata.name} {.metadata.deletionTimestamp}{"\n"}{end}' 2>/dev/null |
+    awk 'NF == 1 { print $1; exit }' || true
 }
 
 # pod_get <namespace> <pod> <port> <path> [scheme] - print the body of an HTTP
