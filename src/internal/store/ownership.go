@@ -7,15 +7,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"time"
 
 	"github.com/sagar2395/snowopslabs/internal/runowner"
 )
 
-// ActiveOwners returns the distinct owners of queued and running work.
+// ActiveOwners returns owners referenced by unfinished or recovery-required work.
 func (s *Store) ActiveOwners(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT owner_id FROM runs
-		WHERE status IN (?, ?) ORDER BY owner_id`, StatusQueued, StatusRunning)
+		WHERE status IN (?, ?) OR recovery_state = ? ORDER BY owner_id`, StatusQueued, StatusRunning, RecoveryRequired)
 	if err != nil {
 		return nil, fmt.Errorf("reading run owners: %w", err)
 	}
@@ -35,17 +36,19 @@ func (s *Store) recoverOwners(ctx context.Context, owners []string, at time.Time
 	var changed []string
 	for _, id := range owners {
 		var lock *runowner.Lock
+		missing := false
 		if id != "" {
 			var err error
 			lock, err = runowner.Probe(ctx, s.path, id)
 			if errors.Is(err, runowner.ErrBusy) {
 				continue
 			}
-			if err != nil {
+			missing = errors.Is(err, fs.ErrNotExist)
+			if err != nil && !missing {
 				return changed, fmt.Errorf("checking owner %s; repair its owner file before recovery: %w", id, err)
 			}
 		}
-		ids, err := s.recoverOwner(ctx, id, at)
+		ids, err := s.recoverOwner(ctx, id, at, missing)
 		closeErr := lock.Close()
 		if err != nil || closeErr != nil {
 			return changed, errors.Join(err, closeErr)
@@ -55,23 +58,25 @@ func (s *Store) recoverOwners(ctx context.Context, owners []string, at time.Time
 	return changed, nil
 }
 
-func (s *Store) recoverOwner(ctx context.Context, owner string, at time.Time) ([]string, error) {
+func (s *Store) recoverOwner(ctx context.Context, owner string, at time.Time, missing bool) ([]string, error) {
 	var changed []string
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT id, status FROM runs
-			WHERE owner_id = ? AND recovery_state = ? AND status IN (?, ?)`,
-			owner, RecoveryNone, StatusQueued, StatusRunning)
+		rows, err := tx.QueryContext(ctx, `SELECT id, status, recovery_state FROM runs
+			WHERE owner_id = ? AND status IN (?, ?) AND
+			(recovery_state = ? OR (? AND recovery_state = ? AND recovery_reason <> 'owner_missing'))`,
+			owner, StatusQueued, StatusRunning, RecoveryNone, missing, RecoveryRequired)
 		if err != nil {
 			return err
 		}
 		type pendingRun struct {
-			id     string
-			status Status
+			id       string
+			status   Status
+			recovery RecoveryState
 		}
 		var pending []pendingRun
 		for rows.Next() {
 			var row pendingRun
-			if err := rows.Scan(&row.id, &row.status); err != nil {
+			if err := rows.Scan(&row.id, &row.status, &row.recovery); err != nil {
 				_ = rows.Close()
 				return err
 			}
@@ -92,10 +97,16 @@ func (s *Store) recoverOwner(ctx context.Context, owner string, at time.Time) ([
 				ended = micro(at)
 				message = "interrupted before execution: queued work cancelled after its owner exited"
 			}
+			if missing {
+				reason = "owner_missing"
+				if row.status == StatusQueued {
+					message = "owner file missing: queued work cancelled before execution"
+				}
+			}
 			res, err := tx.ExecContext(ctx, `UPDATE runs SET status = ?, recovery_state = ?,
 				recovery_reason = ?, ended_at = ?, error = ?
 				WHERE id = ? AND owner_id = ? AND recovery_state = ? AND status = ?`,
-				status, state, reason, ended, message, row.id, owner, RecoveryNone, row.status)
+				status, state, reason, ended, message, row.id, owner, row.recovery, row.status)
 			if err != nil {
 				return err
 			}
@@ -140,7 +151,8 @@ func (s *Store) ReleaseRecoveredRun(ctx context.Context, id, actor string) (Run,
 	}
 	if observed.OwnerID != "" {
 		lock, err := runowner.Probe(ctx, s.path, observed.OwnerID)
-		if err != nil {
+		missing := errors.Is(err, fs.ErrNotExist) && observed.RecoveryReason == "owner_missing"
+		if err != nil && !missing {
 			return Run{}, fmt.Errorf("cannot release run %s; stop its owner or repair its owner file: %w", id, err)
 		}
 		defer func() { _ = lock.Close() }()
@@ -155,15 +167,19 @@ func (s *Store) ReleaseRecoveredRun(ctx context.Context, id, actor string) (Run,
 			result = current
 			return nil
 		}
-		if current.OwnerID != observed.OwnerID || current.RecoveryState != RecoveryRequired || current.Status.Terminal() {
+		if current.OwnerID != observed.OwnerID || current.RecoveryState != RecoveryRequired || current.RecoveryReason != observed.RecoveryReason || current.Status.Terminal() {
 			return fmt.Errorf("run %s changed; inspect it again before recovery", id)
 		}
 		at := s.now().UTC().Truncate(time.Microsecond)
+		reason := "forced_release"
+		if current.RecoveryReason == "owner_missing" {
+			reason = "owner_missing"
+		}
 		message := "Key released by operator. The operation may still be running."
 		res, err := tx.ExecContext(ctx, `UPDATE runs SET status = ?, recovery_state = ?,
-			recovery_reason = 'forced_release', released_at = ?, released_by = ?, ended_at = ?, error = ?
+			recovery_reason = ?, released_at = ?, released_by = ?, ended_at = ?, error = ?
 			WHERE id = ? AND owner_id = ? AND recovery_state = ? AND status IN (?, ?)`,
-			StatusCancelled, RecoveryReleased, at.UnixMicro(), actor, at.UnixMicro(), message,
+			StatusCancelled, RecoveryReleased, reason, at.UnixMicro(), actor, at.UnixMicro(), message,
 			id, observed.OwnerID, RecoveryRequired, StatusQueued, StatusRunning)
 		if err != nil {
 			return err
@@ -173,14 +189,14 @@ func (s *Store) ReleaseRecoveredRun(ctx context.Context, id, actor string) (Run,
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO audit (ts, actor, action, target, run_id, source, detail)
 			VALUES (?, ?, 'run.recover', ?, ?, 'cli', ?)`,
-			at.UnixMicro(), actor, current.LockKey, id, "forced_release; former_owner="+current.OwnerID); err != nil {
+			at.UnixMicro(), actor, current.LockKey, id, "forced_release; reason="+reason+"; former_owner="+current.OwnerID); err != nil {
 			return fmt.Errorf("saving recovery audit; the key remains reserved: %w", err)
 		}
 		if err := appendRecoveryLog(ctx, tx, id, message+" Released by "+actor, at); err != nil {
 			return err
 		}
 		result = current
-		result.Status, result.RecoveryState, result.RecoveryReason = StatusCancelled, RecoveryReleased, "forced_release"
+		result.Status, result.RecoveryState, result.RecoveryReason = StatusCancelled, RecoveryReleased, reason
 		result.ReleasedAt, result.ReleasedBy, result.EndedAt, result.Error = at, actor, at, message
 		return nil
 	})

@@ -327,6 +327,9 @@ still be running. This command does not stop processes or verify cleanup.`,
 				return fmt.Errorf("run %s does not require recovery; inspect it with labctl runs list", rec.ID)
 			}
 			warning := "The operation may still be running. Releasing this key allows another operation on the same key. Check the lab before continuing.\n"
+			if rec.RecoveryReason == "owner_missing" {
+				warning = "labctl can't check whether this work is still running because its owner file is missing. Check the lab before releasing it.\n" + warning
+			}
 			if !force {
 				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Run %s: Recovery required\nKey: %s\n%sRetry with: labctl runs recover %s --force\n", rec.ID, dash(rec.LockKey), warning, rec.ID); err != nil {
 					return err

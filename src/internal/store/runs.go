@@ -342,8 +342,8 @@ func (s *Store) LastRunForLock(ctx context.Context, lockKey string) (Run, bool, 
 	return r, true, nil
 }
 
-// RecoverOrphanedRuns reconciles active rows only while their owner lock is held.
-// Live owners keep their work; interrupted running work keeps its key.
+// RecoverOrphanedRuns preserves busy owners and reconciles interrupted or missing owners.
+// Running work keeps its key until an explicit operator release.
 func (s *Store) RecoverOrphanedRuns(ctx context.Context, at time.Time) ([]string, error) {
 	if at.IsZero() {
 		at = s.now()

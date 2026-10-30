@@ -52,11 +52,17 @@ lock and the store. Worker start and completion require the same owner and no
 recovery override. Children do not inherit the descriptor; acquiring a dead
 owner's lock does not establish that its children stopped.
 
-`labctl runs recover <id> --force` holds the recorded owner's lock through a
-transaction that releases the key and records the former owner, local operator,
-time and reason. Failed audit writes retain the key. Busy or failed lock probes
-refuse recovery. Repeated releases preserve the original audit. Referenced owner
-files are never removed or recreated during a probe.
+For an existing owner file, `labctl runs recover <id> --force` holds its lock
+through a transaction that releases the key and records the former owner, local
+operator, time and reason. Failed audit writes retain the key. Busy owners and other probe
+errors refuse recovery. A missing owner file lets startup continue: queued work
+is cancelled and running work retains its key and logs as `required` with reason
+`owner_missing`. An explicit forced release warns that labctl cannot check whether
+the work is still running and keeps `owner_missing` as the audit reason. Repeated
+releases preserve the original audit. Referenced owner files are never removed or
+recreated during a probe. Startup deletes only unlocked files not named by
+unfinished or recovery-required runs, while holding each file's lock. New owner
+IDs are always fresh random names.
 
 The scope is local storage and one canonical database path on macOS or Linux,
 including WSL2 in its Linux home. Store-lifetime shared upgrade locks and

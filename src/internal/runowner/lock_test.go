@@ -228,6 +228,181 @@ func TestRejectNonregularFiles(t *testing.T) {
 	}
 }
 
+func TestCleanup(t *testing.T) {
+	ctx := t.Context()
+	database := filepath.Join(t.TempDir(), "runs.db")
+	var referenced []string
+	for _, tc := range []struct {
+		name             string
+		referenced, busy bool
+	}{
+		{name: "unused"}, {name: "referenced", referenced: true}, {name: "busy", busy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner, err := New(ctx, database)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer owner.Close()
+			if tc.referenced {
+				referenced = append(referenced, owner.ID)
+			}
+			if !tc.busy {
+				if err := owner.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := Cleanup(ctx, database, referenced); err != nil {
+				t.Fatal(err)
+			}
+			dir, err := Directory(database)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = os.Stat(filepath.Join(dir, owner.ID))
+			keep := tc.referenced || tc.busy
+			if keep && err != nil || !keep && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("owner retained=%v: %v", keep, err)
+			}
+		})
+	}
+	upgrade, err := Upgrade(ctx, database, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgrade.Close()
+	if err := Cleanup(ctx, database, referenced); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := Directory(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "upgrade.lock")); err != nil {
+		t.Fatalf("cleanup removed upgrade lock: %v", err)
+	}
+}
+
+func TestCleanupFailures(t *testing.T) {
+	for _, tc := range []struct{ name string }{
+		{name: "cancelled"}, {name: "deadline"}, {name: "empty database"},
+		{name: "missing owner directory"}, {name: "nonregular owner"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			database := filepath.Join(t.TempDir(), "runs.db")
+			var want error
+			switch tc.name {
+			case "cancelled":
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = cancelled
+				want = context.Canceled
+			case "deadline":
+				expired, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				defer cancel()
+				ctx = expired
+				want = context.DeadlineExceeded
+			case "empty database":
+				database = ""
+			case "nonregular owner":
+				owner, err := New(ctx, database)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := owner.Close(); err != nil {
+					t.Fatal(err)
+				}
+				dir, err := Directory(database)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dir, owner.ID)
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := Cleanup(ctx, database, nil); err == nil || want != nil && !errors.Is(err, want) {
+				t.Fatalf("cleanup = %v; want error %v", err, want)
+			}
+		})
+	}
+}
+
+func TestRejectUnlinkedOwnerRegistration(t *testing.T) {
+	ctx := t.Context()
+	database := filepath.Join(t.TempDir(), "runs.db")
+	dir, err := prepareDirectory(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "owner_"+strings.Repeat("a", 32))
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err := Cleanup(ctx, database, nil); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockOpenedFile(ctx, file, true)
+	if err == nil {
+		_ = lock.Close()
+		t.Fatal("registered an owner whose file cleanup removed before flock")
+	}
+	if !errors.Is(err, errLockReplaced) {
+		t.Fatalf("unlinked registration = %v; want changed-file refusal", err)
+	}
+	if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("refused registration left descriptor open: %v", err)
+	}
+	owner, err := New(ctx, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	if _, err := Probe(ctx, database, owner.ID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("fresh owner does not hold its visible file: %v", err)
+	}
+}
+
+func TestRejectReplacedOwnerRegistration(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		t.Run(map[bool]string{false: "different inode", true: "directory"}[directory], func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "owner_"+strings.Repeat("a", 32))
+			file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if directory {
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(path, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			lock, err := lockOpenedFile(t.Context(), file, true)
+			if err == nil {
+				_ = lock.Close()
+				t.Fatal("registered a replaced owner file")
+			}
+			if !directory && !errors.Is(err, errLockReplaced) {
+				t.Fatalf("replaced registration = %v", err)
+			}
+			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("rejected descriptor remained open: %v", err)
+			}
+		})
+	}
+}
+
 func TestOwnerLockSubprocess(t *testing.T) {
 	mode := os.Getenv("SNOWOPS_RUNOWNER_TEST_MODE")
 	if mode == "" {

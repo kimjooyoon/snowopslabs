@@ -23,12 +23,14 @@ func TestRecoverOwner(t *testing.T) {
 		ownerState   string
 		wantStatus   Status
 		wantRecovery RecoveryState
+		wantReason   string
 		wantError    bool
 	}{
 		{name: "dead queued owner", status: StatusQueued, ownerState: "dead", wantStatus: StatusCancelled, wantRecovery: RecoveryNone},
 		{name: "dead running owner", status: StatusRunning, ownerState: "dead", wantStatus: StatusRunning, wantRecovery: RecoveryRequired},
 		{name: "live owner", status: StatusRunning, ownerState: "live", wantStatus: StatusRunning, wantRecovery: RecoveryNone},
-		{name: "missing owner file", status: StatusRunning, ownerState: "missing", wantStatus: StatusRunning, wantRecovery: RecoveryNone, wantError: true},
+		{name: "missing running owner file", status: StatusRunning, ownerState: "missing", wantStatus: StatusRunning, wantRecovery: RecoveryRequired, wantReason: "owner_missing"},
+		{name: "missing queued owner file", status: StatusQueued, ownerState: "missing", wantStatus: StatusCancelled, wantRecovery: RecoveryNone, wantReason: "owner_missing"},
 		{name: "legacy queued", status: StatusQueued, wantStatus: StatusQueued, wantRecovery: RecoveryRequired},
 		{name: "legacy running", status: StatusRunning, wantStatus: StatusRunning, wantRecovery: RecoveryRequired},
 	} {
@@ -82,6 +84,12 @@ func TestRecoverOwner(t *testing.T) {
 			if rec.Status != tc.wantStatus || rec.RecoveryState != tc.wantRecovery || rec.OwnerID != ownerID {
 				t.Fatalf("recovered run = %+v", rec)
 			}
+			if tc.wantReason != "" && rec.RecoveryReason != tc.wantReason {
+				t.Fatalf("recovery reason = %q; want %q", rec.RecoveryReason, tc.wantReason)
+			}
+			if err := st.CreateRun(ctx, Run{ID: "independent", Kind: "test", LockKey: "other-key"}); err != nil {
+				t.Fatalf("unrelated key blocked by recovery: %v", err)
+			}
 			_, held, err := st.ActiveRunForLock(ctx, "key")
 			if err != nil || held == tc.wantStatus.Terminal() {
 				t.Fatalf("key held = %v, %v", held, err)
@@ -99,9 +107,17 @@ func TestRecoverOwner(t *testing.T) {
 					t.Fatalf("repeated recovery duplicated logs: %+v, %v", after, err)
 				}
 			}
-			if tc.ownerState == "live" || tc.ownerState == "missing" {
+			if tc.ownerState == "live" {
 				if err := st.FinishOwnedRun(ctx, "work", ownerID, StatusSucceeded, nil, "", time.Now(), time.Second); err != nil {
 					t.Fatalf("probe revoked owner's write access: %v", err)
+				}
+			}
+			if tc.ownerState == "missing" {
+				if err := st.StartOwnedRun(ctx, "work", ownerID, time.Now()); err == nil {
+					t.Fatal("missing owner started fenced work")
+				}
+				if err := st.FinishOwnedRun(ctx, "work", ownerID, StatusSucceeded, nil, "", time.Now(), time.Second); err == nil {
+					t.Fatal("missing owner completed fenced work")
 				}
 			}
 		})
@@ -167,9 +183,39 @@ func TestReleaseRecoveredRun(t *testing.T) {
 	}
 }
 
+func TestReleaseMissingOwner(t *testing.T) {
+	ctx := t.Context()
+	st := newStore(t)
+	owner := interruptedRun(t, st)
+	dir, err := runowner.Directory(st.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, owner)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecoverOrphanedRuns(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	released, err := st.ReleaseRecoveredRun(ctx, "work", "uid:501")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if released.RecoveryState != RecoveryReleased || released.RecoveryReason != "owner_missing" || released.OwnerID != owner || released.ReleasedBy != "uid:501" || released.ReleasedAt.IsZero() {
+		t.Fatalf("release = %+v", released)
+	}
+	audit, err := st.ListAudit(ctx, 10)
+	if err != nil || len(audit) != 1 || !strings.Contains(audit[0].Detail, "owner_missing") || !strings.Contains(audit[0].Detail, owner) {
+		t.Fatalf("missing-owner audit = %+v, %v", audit, err)
+	}
+	if err := st.CreateRun(ctx, Run{ID: "replacement", Kind: "test", LockKey: "key"}); err != nil {
+		t.Fatalf("forced release retained key: %v", err)
+	}
+}
+
 func TestReleaseRecoveredRunRefusals(t *testing.T) {
 	for _, tc := range []struct{ name string }{
-		{name: "empty actor"}, {name: "live owner"}, {name: "missing owner file"},
+		{name: "empty actor"}, {name: "live owner"}, {name: "owner_missing with live owner"}, {name: "missing owner file"},
 		{name: "audit write fails"}, {name: "not recovery required"}, {name: "missing run"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -180,12 +226,17 @@ func TestReleaseRecoveredRunRefusals(t *testing.T) {
 			switch tc.name {
 			case "empty actor":
 				actor = ""
-			case "live owner":
+			case "live owner", "owner_missing with live owner":
 				lock, err := runowner.Probe(ctx, st.Path(), owner)
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer lock.Close()
+				if tc.name == "owner_missing with live owner" {
+					if _, err := st.DB().ExecContext(ctx, `UPDATE runs SET recovery_reason = 'owner_missing' WHERE id = 'work'`); err != nil {
+						t.Fatal(err)
+					}
+				}
 			case "missing owner file":
 				dir, err := runowner.Directory(st.Path())
 				if err != nil {

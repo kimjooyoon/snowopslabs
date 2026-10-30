@@ -329,6 +329,13 @@ func (e *Engine) Start(ctx context.Context) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("run: registering owner: %w", err)
 	}
+	referenced, err := e.store.ActiveOwners(ctx)
+	if err != nil {
+		return fmt.Errorf("run: reading owner references: %w", err)
+	}
+	if err := runowner.Cleanup(ctx, e.store.Path(), referenced); err != nil {
+		return fmt.Errorf("run: cleaning unused owner files: %w", err)
+	}
 	_, err = e.store.RecoverOrphanedRuns(ctx, e.now())
 	if err != nil {
 		return fmt.Errorf("run: reconciling interrupted runs: %w", err)

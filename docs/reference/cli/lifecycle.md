@@ -235,16 +235,19 @@ the script the same way. `labctl ui` stops accepting connections and waits up to
 seconds for requests in flight. `scenario verify --watch` stops between
 attempts.
 
-`Recovery required` means an engine exited after recording that work started.
-The saved lifecycle status is historical; the operation may still be running.
-Its key and partial logs remain reserved. `runs logs --follow` drains the saved
+`Recovery required` means work started and its owner exited or its owner file is
+missing. The saved lifecycle status is historical; the operation may still be
+running. Its key and partial logs remain reserved. `runs logs --follow` drains the saved
 output, prints recovery guidance, and exits non-zero. Ordinary cancellation
 cannot release this key.
 
 Inspect the lab before using `runs recover <run-id> --force`. Without `--force`,
 the command shows the run, key and warning and changes nothing. A forced release
 records the local UID, available user name, time, reason and former owner in one
-transaction. It refuses a busy or missing owner file. Repeating the command shows
+transaction. It refuses a busy owner file or another probe error. An
+`owner_missing` run can be released with `--force`; labctl adds a warning that it
+cannot check whether this work is still running and that you must check the lab.
+The audit retains `owner_missing` as its reason. Repeating the command shows
 the existing release without replacing its audit data. A released run says
 `Key released by operator`. This permits another operation on the same key;
 it does not stop a surviving process or establish that cleanup finished.
@@ -297,7 +300,12 @@ cannot detect an old binary that never took these locks. Stopping those processe
 is an operator prerequisite, not a property the migration can prove.
 
 Owner files live beside the canonical database path in `<database>.owners`.
-Keep referenced files intact. Do not recreate a missing file to bypass recovery.
+Do not delete that directory or its referenced files. A missing owner file lets
+startup continue: that owner's queued work is cancelled, while running work keeps
+its key and logs as `required` / `owner_missing`. Other owners and keys continue.
+Inspect the lab before explicitly releasing that work; do not recreate a missing
+file to bypass recovery. Startup removes only unlocked files that no unfinished
+or recovery-required run names, holding their lock during deletion.
 Use local storage on one host: macOS, Linux or WSL2 in its Linux home. Remote
 filesystems, hard-link aliases and external owner-file replacement are unsupported.
 

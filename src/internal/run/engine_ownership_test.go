@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -246,6 +247,140 @@ func TestStartFailureCanBeRetried(t *testing.T) {
 			}
 			if err := engine.Start(t.Context()); err == nil {
 				t.Fatal("accepted start after shutdown")
+			}
+		})
+	}
+}
+
+func TestStartWithMissingOwner(t *testing.T) {
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "runs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	owner, err := runowner.New(ctx, st.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	for _, id := range []string{"queued", "running"} {
+		if err := st.CreateRun(ctx, store.Run{ID: id, Kind: "test", LockKey: id, OwnerID: owner.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.StartOwnedRun(ctx, "running", owner.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := runowner.Directory(st.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, owner.ID)); err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := toolchain.NewResolver(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(st, toolchain.NewFake(), resolver, WithWorkers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("missing owner blocked engine startup: %v", err)
+	}
+	defer engine.Shutdown(ctx)
+	for _, tc := range []struct {
+		id       string
+		status   store.Status
+		recovery store.RecoveryState
+	}{
+		{id: "queued", status: store.StatusCancelled, recovery: store.RecoveryNone},
+		{id: "running", status: store.StatusRunning, recovery: store.RecoveryRequired},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			rec, err := st.GetRun(ctx, tc.id)
+			if err != nil || rec.Status != tc.status || rec.RecoveryState != tc.recovery || rec.RecoveryReason != "owner_missing" {
+				t.Fatalf("recovered run = %+v, %v", rec, err)
+			}
+		})
+	}
+	id, err := engine.Submit(ctx, Spec{Kind: "independent", LockKey: "other", Func: func(context.Context, io.Writer) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	(&harness{t: t, store: st}).waitForStatus(id, store.StatusSucceeded)
+}
+
+func TestStartCleansUnreferencedOwners(t *testing.T) {
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "runs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, tc := range []struct {
+		name             string
+		referenced, busy bool
+	}{
+		{name: "unused"}, {name: "busy", busy: true}, {name: "queued", referenced: true},
+		{name: "running", referenced: true}, {name: "recovery", referenced: true}, {name: "finished"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner, err := runowner.New(ctx, st.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer owner.Close()
+			if tc.referenced || tc.name == "finished" {
+				if err := st.CreateRun(ctx, store.Run{ID: tc.name, Kind: "test", LockKey: tc.name, OwnerID: owner.ID}); err != nil {
+					t.Fatal(err)
+				}
+				if tc.name != "queued" {
+					if err := st.StartOwnedRun(ctx, tc.name, owner.ID, time.Now()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.name == "finished" || tc.name == "recovery" {
+					if err := st.FinishOwnedRun(ctx, tc.name, owner.ID, store.StatusSucceeded, nil, "", time.Now(), 0); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.name == "recovery" {
+					if _, err := st.DB().ExecContext(ctx, `UPDATE runs SET recovery_state = 'required' WHERE id = ?`, tc.name); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if !tc.busy {
+				if err := owner.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resolver, err := toolchain.NewResolver(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine, err := New(st, toolchain.NewFake(), resolver)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Shutdown(ctx)
+			dir, err := runowner.Directory(st.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = os.Stat(filepath.Join(dir, owner.ID))
+			keep := tc.referenced || tc.busy
+			if keep && err != nil || !keep && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("owner file retained=%v: %v", keep, err)
+			}
+			if _, err := runowner.Probe(ctx, st.Path(), engine.owner.ID); !errors.Is(err, runowner.ErrBusy) {
+				t.Fatalf("startup removed or unlocked its owner: %v", err)
 			}
 		})
 	}

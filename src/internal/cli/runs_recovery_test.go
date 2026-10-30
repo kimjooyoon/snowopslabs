@@ -241,3 +241,57 @@ func TestRunsRecoveryStoreFailure(t *testing.T) {
 		t.Fatalf("store failure = %v", err)
 	}
 }
+
+func TestRunsRecoverMissingOwner(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		t.Run(strconv.FormatBool(force), func(t *testing.T) {
+			open := recoveryStore(t)
+			st := open()
+			owner := "owner_" + strings.Repeat("a", 32)
+			if _, err := st.DB().ExecContext(t.Context(), `UPDATE runs SET owner_id = ? WHERE id = 'interrupted'`, owner); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.RecoverOrphanedRuns(t.Context(), time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			cmd := runsCmd()
+			var out, diagnostics bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&diagnostics)
+			args := []string{"recover", "interrupted"}
+			if force {
+				args = append(args, "--force")
+			}
+			cmd.SetArgs(args)
+			err := cmd.ExecuteContext(t.Context())
+			if force && err != nil || !force && !errors.Is(err, store.ErrRecoveryRequired) {
+				t.Fatalf("missing-owner recovery = %v", err)
+			}
+			for _, want := range []string{"can't check whether this work is still running", "Check the lab before releasing it"} {
+				if !strings.Contains(out.String()+diagnostics.String(), want) {
+					t.Errorf("missing warning %q: %s%s", want, out.String(), diagnostics.String())
+				}
+			}
+			st = open()
+			defer st.Close()
+			rec, err := st.GetRun(t.Context(), "interrupted")
+			if err != nil {
+				t.Fatal(err)
+			}
+			audit, err := st.ListAudit(t.Context(), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if force {
+				if rec.RecoveryState != store.RecoveryReleased || rec.RecoveryReason != "owner_missing" || len(audit) != 1 || !strings.Contains(audit[0].Detail, "reason=owner_missing") || !strings.Contains(audit[0].Detail, owner) {
+					t.Fatalf("release = %+v, audit=%+v", rec, audit)
+				}
+			} else if rec.RecoveryState != store.RecoveryRequired || len(audit) != 0 {
+				t.Fatalf("preview changed missing-owner work: %+v, audit=%+v", rec, audit)
+			}
+		})
+	}
+}

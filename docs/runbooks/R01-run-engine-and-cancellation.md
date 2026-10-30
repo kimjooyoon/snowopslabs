@@ -176,8 +176,21 @@ $ ./bin/labctl runs recover <run-id>
 $ ./bin/labctl runs recover <run-id> --force
 ```
 
-The preview changes nothing. A busy, missing or failed owner probe keeps the
-key even with `--force`. Do not recreate owner files to bypass this check.
+The preview changes nothing. A busy owner or another probe error keeps the key
+even with `--force`.
+
+Do not delete the `<database>.owners` directory or its referenced files. If an
+owner file is missing, startup cancels that owner's queued work and marks its
+running work `required` with reason `owner_missing`. Its key and logs stay
+reserved, while other owners and keys continue. The missing file does not prove
+the work stopped: an existing process can keep its lock after deletion.
+
+For an `owner_missing` run, inspect the lab and use the same `--force` command to
+release the key. The command warns that labctl cannot check whether the work is
+still running. The release audit retains `owner_missing` as its reason. Do not
+recreate owner files to bypass a check. Startup cleans up only unlocked files
+that no unfinished or recovery-required run names, deleting each under its lock.
+
 Follow the [offline upgrade procedure](../reference/cli/lifecycle.md#upgrade-the-run-store-offline)
 before migrating. Legacy rows retain their logs and keys and use the same
 explicit release path. Remote cancellation still records a terminal status
