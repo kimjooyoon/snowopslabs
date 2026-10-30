@@ -190,9 +190,13 @@ release the key. The command warns that labctl cannot check whether the work is
 still running. The release audit retains `owner_missing` as its reason. Do not
 recreate owner files to bypass a check. Startup cleans up only unlocked files
 that no unfinished or recovery-required run names, deleting each under its lock.
+An invalid or unreadable unused entry is left in place and reported as a warning;
+other eligible files are still removed and engine startup continues.
 
 Follow the [offline upgrade procedure](../reference/cli/lifecycle.md#upgrade-the-run-store-offline)
-before migrating. Legacy rows retain their logs and keys and use the same
+before migrating. Missing owner files do not block an offline migration; its
+exclusive upgrade lock excludes open stores and retained workers. Existing
+recovery states, keys and logs stay unchanged. Legacy rows retain their logs and keys and use the same
 explicit release path. Remote cancellation still records a terminal status
 before cleanup returns; these recovery tests do not resolve that separate limit.
 

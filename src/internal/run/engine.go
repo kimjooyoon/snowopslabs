@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -334,7 +335,10 @@ func (e *Engine) Start(ctx context.Context) (resultErr error) {
 		return fmt.Errorf("run: reading owner references: %w", err)
 	}
 	if err := runowner.Cleanup(ctx, e.store.Path(), referenced); err != nil {
-		return fmt.Errorf("run: cleaning unused owner files: %w", err)
+		if ctx.Err() != nil {
+			return fmt.Errorf("run: cleaning unused owner files: %w", err)
+		}
+		slog.Warn("could not clean unused owner files; inspect the owner directory", "err", err)
 	}
 	_, err = e.store.RecoverOrphanedRuns(ctx, e.now())
 	if err != nil {

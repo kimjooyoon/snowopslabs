@@ -162,7 +162,8 @@ status and steps record the last known phase, not continuing progress. A missing
 owner file cancels queued work and marks running work `required` with reason
 `owner_missing`, retaining its key and logs. Startup and other owners' work
 continue. Startup deletes only unlocked owner files not named by unfinished or
-recovery-required runs, while holding each file's lock.
+recovery-required runs, while holding each file's lock. It logs cleanup errors
+and continues starting; problematic unused entries do not block other work.
 
 `labctl runs recover <id> --force` releases an interrupted key explicitly. It
 warns that work may still be running, refuses a busy owner or another probe
@@ -208,7 +209,9 @@ error rather than a corruption risk.
 
 The store takes a shared upgrade lock before opening SQLite and holds it for
 its lifetime. A pending migration requires the nonblocking exclusive lock and
-successful probes of recorded active owners. Upgrade offline: stop all old
+successful probes of existing recorded owner files. Missing files allow the
+migration because the exclusive lock excludes open stores and retained workers;
+their runs keep recovery state, keys and logs. Upgrade offline: stop all old
 processes, back up the database and upgrade every entry point before migrating.
 Processes from before this locking protocol cannot be detected by it. Active
 legacy rows retain their keys and logs and require explicit operator recovery.

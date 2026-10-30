@@ -241,7 +241,10 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return s.migrateSchema(ctx, migrations)
+}
 
+func (s *Store) migrateSchema(ctx context.Context, migrations []migration) error {
 	applied, err := currentVersion(ctx, s.db)
 	if err != nil {
 		return err

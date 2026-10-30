@@ -417,64 +417,119 @@ func TestLegacyOwnerMigration(t *testing.T) {
 	}
 }
 
-func TestMigrationRefusesUncertainOwners(t *testing.T) {
-	for _, state := range []string{"busy", "missing", "not regular"} {
-		t.Run(state, func(t *testing.T) {
+func TestMigrationChecksOwners(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		wantError bool
+	}{
+		{name: "busy", wantError: true},
+		{name: "missing"},
+		{name: "owner_missing"},
+		{name: "not regular", wantError: true},
+		{name: "unlocked"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
 			st := newStore(t)
-			owner, err := runowner.New(t.Context(), st.Path())
+			owner, err := runowner.New(ctx, st.Path())
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer func() { _ = owner.Close() }()
-			if err := st.CreateRun(t.Context(), Run{ID: "held", Kind: "test", LockKey: "lab", OwnerID: owner.ID}); err != nil {
+			defer owner.Close()
+			if err := st.CreateRun(ctx, Run{ID: "held", Kind: "test", LockKey: "lab", OwnerID: owner.ID}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := st.db.ExecContext(t.Context(), `DELETE FROM schema_migrations WHERE version = 3`); err != nil {
+			if tc.name == "owner_missing" {
+				if err := st.StartOwnedRun(ctx, "held", owner.ID, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := st.AppendLogs(ctx, "held", []LogLine{{Text: "saved output"}}); err != nil {
 				t.Fatal(err)
 			}
-			path := st.Path()
-			if err := st.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if state != "busy" {
+			if tc.name != "busy" {
 				if err := owner.Close(); err != nil {
 					t.Fatal(err)
 				}
-				dir, err := runowner.Directory(path)
+			}
+			if tc.name == "missing" || tc.name == "owner_missing" || tc.name == "not regular" {
+				dir, err := runowner.Directory(st.Path())
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Remove(filepath.Join(dir, owner.ID)); err != nil {
+				path := filepath.Join(dir, owner.ID)
+				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}
-				if state == "not regular" {
-					if err := os.Mkdir(filepath.Join(dir, owner.ID), 0o700); err != nil {
+				if tc.name == "not regular" {
+					if err := os.Mkdir(path, 0o700); err != nil {
 						t.Fatal(err)
 					}
 				}
 			}
-			opened, err := Open(t.Context(), path)
-			if opened != nil {
-				_ = opened.Close()
+			if tc.name == "owner_missing" {
+				if _, err := st.RecoverOrphanedRuns(ctx, time.Now()); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if err == nil || !strings.Contains(err.Error(), "migration cannot check owner") {
-				t.Fatalf("migration bypassed owner check: %v", err)
-			}
-			db, err := sql.Open("sqlite", path)
+			before, err := st.GetRun(ctx, "held")
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer db.Close()
-			var status, recovery string
-			if err := db.QueryRowContext(t.Context(), `SELECT status, recovery_state FROM runs WHERE id = 'held'`).Scan(&status, &recovery); err != nil {
+			beforeLogs, err := st.ReadLogs(ctx, "held", 0, 100)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if status != string(StatusQueued) || recovery != string(RecoveryNone) {
-				t.Fatalf("refused migration changed work: %s/%s", status, recovery)
+			migrations, err := loadMigrations()
+			if err != nil {
+				t.Fatal(err)
 			}
-			version, err := currentVersion(t.Context(), db)
-			if err != nil || version != 2 {
-				t.Fatalf("refused migration changed version: %d, %v", version, err)
+			version := migrations[len(migrations)-1].version
+			migrations = append(migrations, migration{version: version + 1, name: "next.sql", sql: "CREATE TABLE next_schema (id INTEGER)"})
+			err = st.migrateSchema(ctx, migrations)
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "migration cannot check owner") {
+					t.Fatalf("migration bypassed owner check: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("migration blocked by %s owner: %v", tc.name, err)
+				}
+				version++
+				var count int
+				if err := st.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM next_schema").Scan(&count); err != nil {
+					t.Fatalf("pending migration not applied: %v", err)
+				}
+			}
+			if got, err := st.SchemaVersion(ctx); err != nil || got != version {
+				t.Fatalf("schema version = %d, %v; want %d", got, err, version)
+			}
+			after, err := st.GetRun(ctx, "held")
+			if err != nil || after.Status != before.Status || after.OwnerID != before.OwnerID || after.RecoveryState != before.RecoveryState || after.RecoveryReason != before.RecoveryReason {
+				t.Fatalf("migration changed run: before=%+v after=%+v err=%v", before, after, err)
+			}
+			logs, err := st.ReadLogs(ctx, "held", 0, 100)
+			if err != nil || len(logs) != len(beforeLogs) || len(logs) == 0 || logs[0].Text != "saved output" {
+				t.Fatalf("migration changed logs: %+v, %v", logs, err)
+			}
+			if _, held, err := st.ActiveRunForLock(ctx, "lab"); err != nil || !held {
+				t.Fatalf("migration released key: %v, %v", held, err)
+			}
+			if tc.name == "owner_missing" {
+				if after.RecoveryState != RecoveryRequired || after.RecoveryReason != "owner_missing" {
+					t.Fatalf("missing-owner fixture = %+v", after)
+				}
+				released, err := st.ReleaseRecoveredRun(ctx, "held", "uid:501")
+				if err != nil || released.RecoveryState != RecoveryReleased || released.RecoveryReason != "owner_missing" {
+					t.Fatalf("release after migration = %+v, %v", released, err)
+				}
+				audit, err := st.ListAudit(ctx, 20)
+				if err != nil || len(audit) != 1 || audit[0].Actor != "uid:501" || !strings.Contains(audit[0].Detail, "owner_missing") {
+					t.Fatalf("release audit after migration = %+v, %v", audit, err)
+				}
+				if err := st.CreateRun(ctx, Run{ID: "next", Kind: "test", LockKey: "lab"}); err != nil {
+					t.Fatalf("released key unavailable: %v", err)
+				}
 			}
 		})
 	}

@@ -488,3 +488,41 @@ func TestLockProcessLifetime(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanupContinuesAfterEntryErrors(t *testing.T) {
+	ctx := t.Context()
+	database := filepath.Join(t.TempDir(), "runs.db")
+	upgrade, err := Upgrade(ctx, database, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgrade.Close()
+	dir, err := Directory(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := "owner_" + strings.Repeat("0", 32)
+	link := "owner_" + strings.Repeat("1", 32)
+	unused := "owner_" + strings.Repeat("f", 32)
+	if err := os.Mkdir(filepath.Join(dir, bad), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "missing"), filepath.Join(dir, link)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, unused), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = Cleanup(ctx, database, nil)
+	if err == nil || !strings.Contains(err.Error(), bad) || !strings.Contains(err.Error(), link) {
+		t.Fatalf("cleanup did not report both entries: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, unused)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cleanup stopped before unused owner: %v", err)
+	}
+	for _, id := range []string{bad, link, "upgrade.lock"} {
+		if _, err := os.Lstat(filepath.Join(dir, id)); err != nil {
+			t.Fatalf("cleanup changed retained entry %s: %v", id, err)
+		}
+	}
+}

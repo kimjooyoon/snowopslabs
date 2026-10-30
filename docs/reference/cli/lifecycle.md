@@ -293,7 +293,10 @@ restarting work. Mixed-version and online upgrades are unsupported.
 
 The store holds a shared upgrade lock for its lifetime. A pending migration
 tries the exclusive lock without waiting and checks recorded active owners.
-A busy, missing or unreadable owner file refuses the migration. Legacy active
+A busy, unreadable or invalid owner file refuses the migration. A missing owner
+file allows the offline migration because the exclusive upgrade lock excludes
+open stores and retained workers. Existing recovery states, keys and logs stay
+unchanged. Legacy active
 rows without an owner become recovery required and retain their keys and logs;
 use the same explicit recovery command after checking the lab. The first upgrade
 cannot detect an old binary that never took these locks. Stopping those processes

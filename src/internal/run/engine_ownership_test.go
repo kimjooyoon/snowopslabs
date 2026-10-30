@@ -3,11 +3,14 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -382,6 +385,59 @@ func TestStartCleansUnreferencedOwners(t *testing.T) {
 			if _, err := runowner.Probe(ctx, st.Path(), engine.owner.ID); !errors.Is(err, runowner.ErrBusy) {
 				t.Fatalf("startup removed or unlocked its owner: %v", err)
 			}
+		})
+	}
+}
+
+func TestStartContinuesAfterCleanupErrors(t *testing.T) {
+	for _, kind := range []string{"directory", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := t.Context()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "runs.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			dir, err := runowner.Directory(st.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := "owner_" + strings.Repeat("0", 32)
+			path := filepath.Join(dir, id)
+			if kind == "directory" {
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Symlink(filepath.Join(dir, "missing"), path); err != nil {
+				t.Fatal(err)
+			}
+			resolver, err := toolchain.NewResolver(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine, err := New(st, toolchain.NewFake(), resolver, WithWorkers(1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var warnings bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&warnings, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			if err := engine.Start(ctx); err != nil {
+				t.Fatalf("cleanup blocked engine: %v", err)
+			}
+			defer engine.Shutdown(ctx)
+			if output := warnings.String(); !strings.Contains(output, `"level":"WARN"`) || !strings.Contains(output, id) {
+				t.Fatalf("cleanup warning missing: %s", output)
+			}
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("cleanup changed invalid entry: %v", err)
+			}
+			work, err := engine.Submit(ctx, Spec{Kind: "independent", LockKey: "lab", Func: func(context.Context, io.Writer) error { return nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			(&harness{t: t, store: st}).waitForStatus(work, store.StatusSucceeded)
 		})
 	}
 }

@@ -235,6 +235,11 @@ func (s *Store) lockMigrationOwners(ctx context.Context) ([]*runowner.Lock, erro
 			continue
 		}
 		lock, err := runowner.Probe(ctx, s.path, id)
+		// The exclusive upgrade lock excludes every open store and retained worker.
+		// Missing owner files do not prevent an offline schema upgrade.
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			for _, acquired := range held {
 				_ = acquired.Close()

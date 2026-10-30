@@ -54,6 +54,8 @@ After taking its own lock at startup, remove old owner files only if no unfinish
 or recovery-required run names them and their lock can be acquired. Delete each
 file while holding its lock. Leave referenced and busy files intact. Fresh random
 owner IDs prevent a later engine from reusing a deleted file's name.
+Skip problematic unused entries, continue cleaning other files, and log the errors
+without blocking engine startup. Cancellation still stops startup.
 
 These are cooperation locks, not authentication. Use a cgo-free adapter on macOS
 and Linux, including WSL2 in its Linux home. The
@@ -163,8 +165,10 @@ and online upgrades are unsupported.
 New engines take a shared upgrade lock before opening the store and keep it for
 the store's lifetime. Migration tries that lock exclusively without waiting and
 refuses if it is busy. It also probes the locks for recorded nonempty owner IDs
-and refuses if any is busy, missing, or unreadable. Ownerless legacy rows have no
-file to probe. Keep the acquired locks until the migration transaction finishes.
+and refuses busy, unreadable, or invalid files. A missing file does not block
+migration: the exclusive upgrade lock already excludes open stores and retained
+workers. Preserve missing-owner runs, their recovery state, keys and logs.
+Ownerless legacy rows have no file to probe. Keep the acquired locks until the migration transaction finishes.
 Active legacy rows become recovery required and can then use the explicit recovery
 command. Do not discard their keys or logs during migration.
 
@@ -196,7 +200,10 @@ Implement and test this phase independently of stored cancellation requests:
    do not inherit the descriptor. Startup removes only unlocked owner files that
    no unfinished or recovery-required run names, and holds each lock while
    deleting its file. Referenced or busy owner files are never removed.
-7. Migration refuses known busy or failed lock checks. Migrated ownerless rows keep
+7. Migration allows missing owner files under the exclusive upgrade lock and
+   refuses busy files and other failed checks. Missing-owner runs keep their
+   recovery state, keys and logs and can still be explicitly released.
+   Migrated ownerless rows keep
    their logs and have a supported explicit release path after the offline upgrade.
 8. CLI, API, and follower tests show both recovery required and operator release.
    The remote-cancellation reproducer remains a known limitation until phase 2.

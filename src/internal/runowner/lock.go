@@ -149,9 +149,10 @@ func Cleanup(ctx context.Context, database string, referenced []string) error {
 	for _, id := range referenced {
 		keep[id] = true
 	}
+	var cleanupErr error
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return err
+			return errors.Join(cleanupErr, err)
 		}
 		id := entry.Name()
 		if !validOwnerID(id) || keep[id] {
@@ -162,17 +163,18 @@ func Cleanup(ctx context.Context, database string, referenced []string) error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("locking unused owner %s for cleanup: %w", id, err)
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("locking unused owner %s for cleanup: %w", id, err))
+			continue
 		}
 		removeErr := os.Remove(filepath.Join(dir, id))
 		if errors.Is(removeErr, fs.ErrNotExist) {
 			removeErr = nil
 		}
 		if err := errors.Join(removeErr, lock.Close()); err != nil {
-			return fmt.Errorf("removing unused owner %s: %w", id, err)
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("removing unused owner %s: %w", id, err))
 		}
 	}
-	return nil
+	return cleanupErr
 }
 
 // Upgrade takes the shared store-lifetime lock or exclusive migration lock.
