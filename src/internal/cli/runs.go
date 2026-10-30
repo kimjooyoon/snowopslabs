@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/user"
+	"strconv"
 	"text/tabwriter"
 	"time"
 
@@ -26,7 +29,7 @@ func runsCmd() *cobra.Command {
 exit code and full output. Records survive restarts, so a run can be read back
 long after it finished.`,
 	}
-	cmd.AddCommand(runsListCmd(), runsLogsCmd(), runsCancelCmd())
+	cmd.AddCommand(runsListCmd(), runsLogsCmd(), runsCancelCmd(), runsRecoverCmd())
 	return cmd
 }
 
@@ -92,10 +95,27 @@ func writeRunTable(out io.Writer, runs []store.Run) error {
 	w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 	fmt.Fprintln(w, "ID\tKIND\tTARGET\tSTATUS\tSTARTED\tDURATION")
 	for _, r := range runs {
+		status := string(r.Status)
+		switch r.RecoveryState {
+		case store.RecoveryRequired:
+			status = "Recovery required"
+		case store.RecoveryReleased:
+			status = "Key released by operator"
+		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.ID, r.Kind, dash(r.Target), r.Status, relativeTime(r.StartedAt), duration(r))
+			r.ID, r.Kind, dash(r.Target), status, relativeTime(r.StartedAt), duration(r))
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	for _, r := range runs {
+		if r.RecoveryState == store.RecoveryRequired || r.RecoveryState == store.RecoveryReleased {
+			if _, err := fmt.Fprintf(out, "\nRun %s: %s", r.ID, summarise(r)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func runsLogsCmd() *cobra.Command {
@@ -183,7 +203,7 @@ func streamRunLogs(ctx context.Context, out io.Writer, st runLogSource, runID st
 		if err != nil {
 			return err
 		}
-		ended = rec.Status.Terminal()
+		ended = rec.Status.Terminal() || rec.RecoveryState == store.RecoveryRequired
 		if !ended && len(lines) == 0 {
 			select {
 			case <-ctx.Done():
@@ -193,13 +213,22 @@ func streamRunLogs(ctx context.Context, out io.Writer, st runLogSource, runID st
 		}
 	}
 
-	if rec.Status.Terminal() {
+	if rec.Status.Terminal() || rec.RecoveryState == store.RecoveryRequired {
 		fmt.Fprintf(out, "\n%s", summarise(rec))
+	}
+	if follow && rec.RecoveryState == store.RecoveryRequired {
+		return fmt.Errorf("%w: check the lab, then use labctl runs recover %s --force", store.ErrRecoveryRequired, rec.ID)
 	}
 	return nil
 }
 
 func summarise(r store.Run) string {
+	if r.RecoveryState == store.RecoveryRequired {
+		return fmt.Sprintf("Recovery required. The key remains reserved.\nCheck the lab, then use: labctl runs recover %s --force\n", r.ID)
+	}
+	if r.RecoveryState == store.RecoveryReleased {
+		return fmt.Sprintf("Key released by operator %s at %s.\nThe key was released. The operation may still be running.\n", r.ReleasedBy, r.ReleasedAt.UTC().Format(time.RFC3339Nano))
+	}
 	switch r.Status {
 	case store.StatusSucceeded:
 		return fmt.Sprintf("Succeeded in %s.\n", r.Duration.Round(time.Millisecond))
@@ -249,6 +278,9 @@ a server you are not attached to), use the API or the UI instead.`,
 			if rec.Status.Terminal() {
 				return fmt.Errorf("run %s already finished (%s)", id, rec.Status)
 			}
+			if rec.RecoveryState == store.RecoveryRequired {
+				return fmt.Errorf("%w: check the lab, then use labctl runs recover %s --force", store.ErrRecoveryRequired, id)
+			}
 
 			// The run belongs to another process, so record the cancellation in
 			// the store; that process sees it and stops the run.
@@ -268,6 +300,61 @@ a server you are not attached to), use the API or the UI instead.`,
 	}
 }
 
+func runsRecoverCmd() *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "recover <run-id>",
+		Short: "Release an interrupted run's key after checking the lab",
+		Long: `Shows interrupted work and its reserved key. With --force, records an
+operator release and permits another operation on that key. The operation may
+still be running. This command does not stop processes or verify cleanup.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := openStore(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+			rec, err := st.GetRun(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if rec.RecoveryState == store.RecoveryReleased {
+				_, err = fmt.Fprint(cmd.OutOrStdout(), summarise(rec))
+				return err
+			}
+			if rec.RecoveryState != store.RecoveryRequired {
+				return fmt.Errorf("run %s does not require recovery; inspect it with labctl runs list", rec.ID)
+			}
+			warning := "The operation may still be running. Releasing this key allows another operation on the same key. Check the lab before continuing.\n"
+			if rec.RecoveryReason == "owner_missing" {
+				warning = "labctl can't check whether this work is still running because its owner file is missing. Check the lab before releasing it.\n" + warning
+			}
+			if !force {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Run %s: Recovery required\nKey: %s\n%sRetry with: labctl runs recover %s --force\n", rec.ID, dash(rec.LockKey), warning, rec.ID); err != nil {
+					return err
+				}
+				return store.ErrRecoveryRequired
+			}
+			if _, err := fmt.Fprint(cmd.ErrOrStderr(), warning); err != nil {
+				return err
+			}
+			actor := "uid=" + strconv.Itoa(os.Getuid())
+			if u, err := user.LookupId(strconv.Itoa(os.Getuid())); err == nil && u.Username != "" {
+				actor += " (" + u.Username + ")"
+			}
+			rec, err = st.ReleaseRecoveredRun(cmd.Context(), rec.ID, actor)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprint(cmd.OutOrStdout(), summarise(rec))
+			return err
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "release the key even though the operation may still be running")
+	return cmd
+}
+
 func dash(s string) string {
 	if s == "" {
 		return "-"
@@ -276,6 +363,9 @@ func dash(s string) string {
 }
 
 func duration(r store.Run) string {
+	if r.RecoveryState == store.RecoveryRequired {
+		return "-"
+	}
 	if r.Duration > 0 {
 		return r.Duration.Round(time.Millisecond).String()
 	}

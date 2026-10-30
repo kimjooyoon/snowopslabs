@@ -220,15 +220,15 @@ func pinsWorkload(cmd *cobra.Command) bool {
 // skipSharedInit reports whether a command runs without the setup in
 // PersistentPreRunE (config, scriptExec and the engines). These commands
 // diagnose a broken environment (doctor), need no config (help, completion,
-// validate), or only read the run store (runs list|logs|cancel).
+// validate), or operate directly on the run store.
 //
-// "list", "logs" and "cancel" are skipped only under `runs`: other commands
+// Run-store commands are skipped only under `runs`: other commands
 // with those names, such as `scenario list`, need the engines.
 func skipSharedInit(cmd *cobra.Command) bool {
 	switch cmd.Name() {
 	case "completion", "help", "doctor", "runs", "validate":
 		return true
-	case "list", "logs", "cancel":
+	case "list", "logs", "cancel", "recover":
 		p := cmd.Parent()
 		return p != nil && p.Name() == "runs"
 	}

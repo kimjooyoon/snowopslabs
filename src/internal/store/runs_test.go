@@ -530,7 +530,7 @@ func TestListRuns(t *testing.T) {
 func TestRecoverOrphanedRuns(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("cancels in-flight runs and leaves terminal ones alone", func(t *testing.T) {
+	t.Run("preserves legacy reservations and leaves terminal runs alone", func(t *testing.T) {
 		s := newStore(t)
 		if err := s.CreateRun(ctx, Run{ID: "queued", Kind: "test", LockKey: "lab:a"}); err != nil {
 			t.Fatalf("CreateRun: %v", err)
@@ -558,11 +558,11 @@ func TestRecoverOrphanedRuns(t *testing.T) {
 
 		for _, id := range []string{"queued", "running"} {
 			got, _ := s.GetRun(ctx, id)
-			if got.Status != StatusCancelled {
-				t.Errorf("%s: status = %q, want cancelled", id, got.Status)
+			if got.Status != Status(id) || got.RecoveryState != RecoveryRequired {
+				t.Errorf("%s: status/recovery = %q/%q", id, got.Status, got.RecoveryState)
 			}
 			// The user must be able to tell an interruption from a real cancel.
-			if !strings.Contains(got.Error, "interrupted") {
+			if !strings.Contains(got.Error, "labctl runs recover") {
 				t.Errorf("%s: error = %q, want it to explain the interruption", id, got.Error)
 			}
 		}
@@ -573,7 +573,7 @@ func TestRecoverOrphanedRuns(t *testing.T) {
 		}
 	})
 
-	t.Run("releases the locks the dead runs held", func(t *testing.T) {
+	t.Run("retains a legacy key until explicit operator recovery", func(t *testing.T) {
 		s := newStore(t)
 		if err := s.CreateRun(ctx, Run{ID: "stuck", Kind: "test", LockKey: "lab:default"}); err != nil {
 			t.Fatalf("CreateRun: %v", err)
@@ -585,8 +585,14 @@ func TestRecoverOrphanedRuns(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ActiveRunForLock: %v", err)
 		}
-		if found {
-			t.Error("a recovered run must release its lock, or it blocks forever")
+		if !found {
+			t.Error("legacy work lost its reservation before operator recovery")
+		}
+		if _, err := s.ReleaseRecoveredRun(ctx, "stuck", "uid:501"); err != nil {
+			t.Fatal(err)
+		}
+		if _, held, err := s.ActiveRunForLock(ctx, "lab:default"); err != nil || held {
+			t.Fatalf("operator recovery did not release the key: %v, %v", held, err)
 		}
 	})
 

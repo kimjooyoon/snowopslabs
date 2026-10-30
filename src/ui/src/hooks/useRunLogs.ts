@@ -41,6 +41,10 @@ export function useRunLogs(id: string | null) {
           setDone(true)
           return
         }
+        if (res.recoveryState === 'required' && res.lines.length === 0) {
+          setError(`Recovery required. Check the lab, then use: ${res.recoveryCommand ?? `labctl runs recover ${id} --force`}`)
+          return
+        }
       } catch (e) {
         if (cancelled) return
         setError(errMessage(e))

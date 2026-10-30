@@ -223,6 +223,8 @@ labctl runs list --status failed
 labctl runs logs <run-id>               # the run's full output
 labctl runs logs <run-id> --follow      # keep printing until the run ends
 labctl runs cancel <run-id>             # cancel a queued or in-progress run
+labctl runs recover <run-id>            # inspect interrupted work without changing it
+labctl runs recover <run-id> --force    # explicitly release its reserved key
 ```
 
 Ctrl-C (or SIGTERM) stops the command and the run it started: the script's
@@ -233,12 +235,82 @@ the script the same way. `labctl ui` stops accepting connections and waits up to
 seconds for requests in flight. `scenario verify --watch` stops between
 attempts.
 
+`Recovery required` means work started and its owner exited or its owner file is
+missing. The saved lifecycle status is historical; the operation may still be
+running. Its key and partial logs remain reserved. `runs logs --follow` drains the saved
+output, prints recovery guidance, and exits non-zero. Ordinary cancellation
+cannot release this key.
+
+Inspect the lab before using `runs recover <run-id> --force`. Without `--force`,
+the command shows the run, key and warning and changes nothing. A forced release
+records the local UID, available user name, time, reason and former owner in one
+transaction. It refuses a busy owner file or another probe error. An
+`owner_missing` run can be released with `--force`; labctl adds a warning that it
+cannot check whether this work is still running and that you must check the lab.
+The audit retains `owner_missing` as its reason. Repeating the command shows
+the existing release without replacing its audit data. A released run says
+`Key released by operator`. This permits another operation on the same key;
+it does not stop a surviving process or establish that cleanup finished.
+
+The separate remote-cancellation path still records `cancelled` before execution
+and cleanup return. Owner recovery does not fix that ordering. Do not treat a
+remote cancellation as proof that another same-key operation is safe. Stored
+cancellation requests remain planned in [the recovery design](../../rfcs/0002-owned-runs-and-cancellation.md#phase-2-store-cancellation-requests).
+
 | Command | Flag | Default | Meaning |
 |---|---|---|---|
 | `runs list` | `--limit` | `20` | maximum runs to show |
 | | `--kind` | - | filter by kind, e.g. `platform.install` |
 | | `--status` | - | filter by status |
 | `runs logs` | `-f, --follow` | off | stream new output until the run ends |
+| `runs recover` | `--force` | off | release an interrupted key after warning that work may still be running |
+
+### Run API recovery fields
+
+`GET /api/v2/runs`, `GET /api/v2/runs/{id}` and
+`GET /api/v2/runs/{id}/logs?after=<seq>` add optional `recoveryState`,
+`recoveryReason`, `recoveryCommand`, `ownerId`, `releasedAt` and `releasedBy`.
+`recoveryState=required` keeps the key; `released` records an operator override.
+The owner ID remains the former engine's ID after release. The release timestamp
+and actor are omitted before release.
+
+The log response's `done` contract is unchanged: true only for a terminal status
+with no lines after the cursor. A recovery-aware follower reads until an empty
+page with `recoveryState=required`, then stops with recovery guidance even though
+`done` remains false. Clients that ignore recovery fields can show only the last
+saved lifecycle status and keep polling. The Runs screen shows the recovery
+state, saved steps and release audit, and hides advancing duration and ordinary
+cancellation for interrupted work. `POST /api/v2/runs/{id}/cancel` returns
+`409 recovery_required` with the recovery command for that work. Key release is
+available through the local CLI, not a new REST mutation.
+
+### Upgrade the run store offline
+
+Stop every old labctl process, including servers and workers. Back up the
+database in `SNOWOPS_HOME` and its associated files after stopping those
+processes. Upgrade all entry points, then open the store to migrate before
+restarting work. Mixed-version and online upgrades are unsupported.
+
+The store holds a shared upgrade lock for its lifetime. A pending migration
+tries the exclusive lock without waiting and checks recorded active owners.
+A busy, unreadable or invalid owner file refuses the migration. A missing owner
+file allows the offline migration because the exclusive upgrade lock excludes
+open stores and retained workers. Existing recovery states, keys and logs stay
+unchanged. Legacy active
+rows without an owner become recovery required and retain their keys and logs;
+use the same explicit recovery command after checking the lab. The first upgrade
+cannot detect an old binary that never took these locks. Stopping those processes
+is an operator prerequisite, not a property the migration can prove.
+
+Owner files live beside the canonical database path in `<database>.owners`.
+Do not delete that directory or its referenced files. A missing owner file lets
+startup continue: that owner's queued work is cancelled, while running work keeps
+its key and logs as `required` / `owner_missing`. Other owners and keys continue.
+Inspect the lab before explicitly releasing that work; do not recreate a missing
+file to bypass recovery. Startup removes only unlocked files that no unfinished
+or recovery-required run names, holding their lock during deletion.
+Use local storage on one host: macOS, Linux or WSL2 in its Linux home. Remote
+filesystems, hard-link aliases and external owner-file replacement are unsupported.
 
 How the engine records and cancels work is in
 [architecture §3](../../architecture/ARCHITECTURE.md) and

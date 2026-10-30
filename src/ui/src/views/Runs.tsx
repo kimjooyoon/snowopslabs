@@ -43,6 +43,7 @@ function relTime(iso?: string): string {
 }
 
 function durationLabel(r: RunSummary): string {
+  if (r.recoveryState === 'required') return '-'
   if (r.durationMs && r.durationMs > 0) {
     const s = r.durationMs / 1000
     return s < 1 ? `${r.durationMs}ms` : `${s.toFixed(s < 10 ? 1 : 0)}s`
@@ -51,6 +52,18 @@ function durationLabel(r: RunSummary): string {
     return `${Math.floor((Date.now() - new Date(r.startedAt).getTime()) / 1000)}s…`
   }
   return '-'
+}
+
+function runLabel(r: RunSummary): string {
+  if (r.recoveryState === 'required') return 'Recovery required'
+  if (r.recoveryState === 'released') return 'Key released by operator'
+  return r.status
+}
+
+function runVariant(r: RunSummary) {
+  if (r.recoveryState === 'required') return 'stopped' as const
+  if (r.recoveryState === 'released') return 'category' as const
+  return statusVariant(r.status)
 }
 
 const STATUS_FILTERS = ['all', 'running', 'succeeded', 'failed', 'cancelled'] as const
@@ -140,7 +153,7 @@ export function Runs({ notify }: RunsProps) {
                       <span className="run-row-title">{r.kind}{r.target ? ` · ${r.target}` : ''}</span>
                       <span className="run-row-sub">{relTime(r.startedAt ?? r.queuedAt)}</span>
                     </span>
-                    <Badge variant={statusVariant(r.status)}>{r.status}</Badge>
+                    <Badge variant={runVariant(r)}>{runLabel(r)}</Badge>
                   </button>
                 </li>
               ))}
@@ -164,14 +177,18 @@ function RunDetailPanel({ runId, summary, notify, onChanged }: {
   onChanged: () => void
 }) {
   const [cancelling, setCancelling] = useState(false)
-  const terminal = isTerminal(summary.status)
+  const settled = isTerminal(summary.status) || summary.recoveryState === 'required'
 
   const { data: detail } = useApiQuery(
     ['runs', runId],
     () => api.getRun(runId),
-    { refetchInterval: terminal ? undefined : 3000 },
+    { refetchInterval: settled ? undefined : 3000 },
   )
   const { lines, done, error: logError } = useRunLogs(runId)
+  const current = detail ?? summary
+  const recoveryRequired = current.recoveryState === 'required'
+  const released = current.recoveryState === 'released'
+  const inactive = isTerminal(current.status) || recoveryRequired
 
   const logRef = useRef<HTMLPreElement>(null)
   useEffect(() => {
@@ -198,8 +215,8 @@ function RunDetailPanel({ runId, summary, notify, onChanged }: {
       <div className="card-header">
         <span className="card-title truncate">{summary.kind}{summary.target ? ` · ${summary.target}` : ''}</span>
         <div className="card-tools">
-          <Badge variant={statusVariant(summary.status)}>{summary.status}</Badge>
-          {!terminal && (
+          <Badge variant={runVariant(current)}>{runLabel(current)}</Badge>
+          {!inactive && (
             <button className="btn btn-sm btn-danger" onClick={onCancel} disabled={cancelling}>
               {cancelling ? 'Cancelling…' : 'Cancel'}
             </button>
@@ -210,10 +227,22 @@ function RunDetailPanel({ runId, summary, notify, onChanged }: {
       <div className="meta-grid">
         <Meta label="Run ID" value={summary.id} mono />
         <Meta label="Started" value={relTime(summary.startedAt ?? summary.queuedAt)} />
-        <Meta label="Duration" value={durationLabel(summary)} />
+        <Meta label="Duration" value={durationLabel(current)} />
         {summary.exitCode != null && <Meta label="Exit code" value={String(summary.exitCode)} />}
         {summary.actor && <Meta label="Actor" value={summary.actor} />}
+        {released && current.releasedBy && <Meta label="Released by" value={current.releasedBy} />}
+        {released && current.releasedAt && <Meta label="Released at" value={current.releasedAt} />}
+        {released && current.ownerId && <Meta label="Former owner" value={current.ownerId} mono />}
       </div>
+
+      {(recoveryRequired || released) && (
+        <div className="banner banner-warn mt-3" role="alert">
+          <span className="banner-body">
+            The operation may still be running. Check the lab before starting another operation on the same key.
+            {recoveryRequired && <> The key remains reserved. To release it explicitly, use <code>{current.recoveryCommand ?? `labctl runs recover ${runId} --force`}</code>.</>}
+          </span>
+        </div>
+      )}
 
       {summary.error && (
         <div className="banner banner-warn mt-3" role="alert">
@@ -228,7 +257,7 @@ function RunDetailPanel({ runId, summary, notify, onChanged }: {
           <ol className="timeline mt-2">
             {steps.map(s => (
               <li key={s.index} className="timeline-item">
-                <Badge variant={s.status === 'succeeded' ? 'running' : s.status === 'failed' ? 'stopped' : 'pending'}>{s.status}</Badge>
+                <Badge variant={recoveryRequired || released ? 'category' : s.status === 'succeeded' ? 'running' : s.status === 'failed' ? 'stopped' : 'pending'}>{recoveryRequired || released ? `Last saved: ${s.status}` : s.status}</Badge>
                 <span>{s.name}</span>
               </li>
             ))}
@@ -239,7 +268,7 @@ function RunDetailPanel({ runId, summary, notify, onChanged }: {
       <div className="mt-3">
         <div className="row-between mt-2">
           <span className="meta-label">Output</span>
-          {!terminal && !done && <span className="hint-text" aria-live="polite">streaming…</span>}
+          {!inactive && !done && <span className="hint-text" aria-live="polite">streaming…</span>}
         </div>
         {logError && (
           <div className="banner banner-warn mt-2" role="alert">
@@ -249,7 +278,7 @@ function RunDetailPanel({ runId, summary, notify, onChanged }: {
         )}
         <pre ref={logRef} className="run-output mt-2">
           {lines.length === 0
-            ? <span className="run-output-placeholder">{terminal ? 'No output was recorded for this run.' : 'Waiting for output…'}</span>
+            ? <span className="run-output-placeholder">{inactive ? 'No output was recorded for this run.' : 'Waiting for output…'}</span>
             : lines.map(l => (
                 <span key={l.seq} className={l.stream === 'stderr' ? 'out-stderr' : l.stream === 'system' ? 'out-system' : undefined}>
                   {l.stream === 'stderr' ? '! ' : l.stream === 'system' ? '* ' : ''}{l.text}{'\n'}

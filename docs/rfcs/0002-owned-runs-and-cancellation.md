@@ -1,12 +1,12 @@
 # RFC 0002: Owner-aware run recovery
 
-**Status:** Draft, not implemented or accepted
+**Status:** Accepted design; phase 1 implemented, phase 2 planned
 **Author:** @kimjooyoon
 **Date:** 2026-10-25
 
 ## Summary
 
-**Planned:** give each engine an owner ID and a file lock. Starting another
+Each engine has an owner ID and a file lock. Starting another
 engine must leave a live owner's runs alone. If an engine dies, keep interrupted
 running work visible and let the operator explicitly release its lock key.
 
@@ -34,8 +34,10 @@ process cleanup. These observations remain separate from the proposed changes.
 ### Register each engine
 
 Support engines on one host, using local storage and one canonical database path
-and owner directory. Remote filesystems, hard-link aliases, and external deletion
-or replacement of referenced owner files are unsupported.
+and owner directory. Keep `<database>.owners` and its referenced files intact.
+Deleting a file can leave work running without a checkable owner. Remote
+filesystems, hard-link aliases, and external replacement of owner files are
+unsupported.
 
 Each engine creates a fresh random owner ID and an owner file beside the database.
 It takes an exclusive nonblocking `flock` before accepting work. Keep that file
@@ -45,7 +47,15 @@ shutdown times out, keep the lock and store open while workers finish.
 Do not pass the descriptor to child processes. Never reuse an owner ID, replace a
 referenced file, or create a missing file during a probe. A busy lock means another
 engine may still own the run. Acquiring its lock allows recovery of that owner's
-rows. It does not prove that child processes have stopped.
+rows. It does not prove that child processes have stopped. A missing file does
+not prove the owner exited: a process can retain its lock after deletion.
+
+After taking its own lock at startup, remove old owner files only if no unfinished
+or recovery-required run names them and their lock can be acquired. Delete each
+file while holding its lock. Leave referenced and busy files intact. Fresh random
+owner IDs prevent a later engine from reusing a deleted file's name.
+Skip problematic unused entries, continue cleaning other files, and log the errors
+without blocking engine startup. Cancellation still stops startup.
 
 These are cooperation locks, not authentication. Use a cgo-free adapter on macOS
 and Linux, including WSL2 in its Linux home. The
@@ -90,17 +100,21 @@ to that owner's rows.
 | Existing lock acquired | queued | Cancel without executing; release the key |
 | Existing lock acquired | running | Mark recovery required; keep the key and logs |
 | Legacy row during offline upgrade | queued or running | Mark recovery required; keep the key and logs |
-| Missing file or failed probe | queued or running | Report the error; leave the row and owner's write access unchanged |
+| Missing file | queued | Cancel without executing; release the key; continue startup |
+| Missing file | running | Mark recovery required with reason `owner_missing`; keep the key and logs; continue startup |
+| Other failed probe | queued or running | Report the error; leave the row and owner's write access unchanged |
 | Finished row | any | Leave unchanged |
 
 Save the transition to running before any script or in-process action starts.
 This makes recovery of a dead owner's queued work safe. A crash just after that
 transition still needs recovery, even if no script started. Repeated startup
-recovery must give the same result. Unrelated keys and unlocked probes can proceed.
+recovery must give the same result. A missing owner blocks only that owner's
+running work; other owners and other keys can proceed. A cancelled queued row
+cannot start because worker start requires that it is still queued.
 
 ### Release a key explicitly
 
-**Planned CLI:** `labctl runs recover <id> --force` releases a run whose recovery
+**CLI:** `labctl runs recover <id> --force` releases a run whose recovery
 state is `required`. Without `--force`, show the run, its key, the warning below,
 and how to retry. Do not change the row.
 
@@ -108,16 +122,19 @@ Warn before a forced release: "The operation may still be running. Releasing thi
 key allows another operation on the same key. Check the lab before continuing."
 This is an operator override, not a check that execution or cleanup finished.
 
-For a run with an owner ID, acquire that owner's lock and hold it through the
-store transaction. Refuse a busy lock even with `--force`. If the file is missing
-or the probe fails, report the error and keep the key; the operator must repair
-the owner-file problem first. Migrated rows without an owner ID can use the same
+For a run with an existing owner file, acquire that owner's lock and hold it
+through the store transaction. Refuse a busy lock even with `--force`. For an `owner_missing`
+run, allow explicit release without recreating the file, and add this warning:
+"labctl can't check whether this work is still running. Check the lab before
+releasing it." Keep `owner_missing` as the audit reason. Other failed probes keep
+the key and report the error. Migrated rows without an owner ID can use the same
 command after the offline upgrade. They have no owner file to probe.
 
 In one transaction, recheck that recovery is still required, mark the run
-cancelled, set `recovery_state=released` and `recovery_reason=forced_release`, and
-record the release time and local operator UID and available user name. Keep the run ID, former
-owner ID, and partial logs. If the audit fields cannot be saved, do not release
+cancelled, set `recovery_state=released`, and record the release time and local
+operator UID and available user name. Set `recovery_reason=forced_release` for
+ordinary interrupted work; retain `owner_missing` for a missing-owner release.
+Keep the run ID, former owner ID, and partial logs. If the audit fields cannot be saved, do not release
 the key. Two concurrent recoveries must not release or record the same run twice.
 A repeated command reports the existing release without replacing its audit data.
 
@@ -129,7 +146,7 @@ the lab; the warning and retained audit record make that limitation explicit.
 ### Show recovery in clients
 
 Add optional recovery and release fields to run summaries, details, and log
-responses. Display `Recovery required` with the planned recovery command for a
+responses. Display `Recovery required` with the recovery command for a
 held key. After a forced release, display `Key released by operator`, including
 who released it, when, and the warning that work may still be running.
 
@@ -148,8 +165,10 @@ and online upgrades are unsupported.
 New engines take a shared upgrade lock before opening the store and keep it for
 the store's lifetime. Migration tries that lock exclusively without waiting and
 refuses if it is busy. It also probes the locks for recorded nonempty owner IDs
-and refuses if any is busy, missing, or unreadable. Ownerless legacy rows have no
-file to probe. Keep the acquired locks until the migration transaction finishes.
+and refuses busy, unreadable, or invalid files. A missing file does not block
+migration: the exclusive upgrade lock already excludes open stores and retained
+workers. Preserve missing-owner runs, their recovery state, keys and logs.
+Ownerless legacy rows have no file to probe. Keep the acquired locks until the migration transaction finishes.
 Active legacy rows become recovery required and can then use the explicit recovery
 command. Do not discard their keys or logs during migration.
 
@@ -165,23 +184,33 @@ Implement and test this phase independently of stored cancellation requests:
 1. Starting a second engine preserves a live owner's run and key. A paused owner
    is still live; a failed probe must not change its row or block its own writes.
 2. A dead owner's queued work is cancelled without execution. Interrupted running
-   work keeps its key and logs, including when a child process survives.
+   work keeps its key and logs, including when a child process survives. Missing
+   owners cancel queued work and mark running work `required` / `owner_missing`;
+   startup succeeds and another owner or key still works.
 3. Recovery without `--force` changes nothing. A forced release records its actor,
    time, reason, and former owner, and allows a new same-key run. It does not claim
-   that the surviving child stopped. Busy-owner and failed-probe cases retain the key.
+   that the surviving child stopped. An `owner_missing` release adds the stronger
+   warning and retains that audit reason. Busy-owner and other failed-probe cases
+   retain the key.
 4. Concurrent and repeated recovery records one release. A failed audit write keeps
    the key. An old completion cannot overwrite the released result.
 5. Separate connections competing for the same key have one holder. Disjoint keys
    and unlocked probes still proceed.
 6. Shutdown timeouts retain the store and owner lock until workers finish. Children
-   do not inherit the descriptor. Referenced or busy owner files are never removed.
-7. Migration refuses known busy or failed lock checks. Migrated ownerless rows keep
+   do not inherit the descriptor. Startup removes only unlocked owner files that
+   no unfinished or recovery-required run names, and holds each lock while
+   deleting its file. Referenced or busy owner files are never removed.
+7. Migration allows missing owner files under the exclusive upgrade lock and
+   refuses busy files and other failed checks. Missing-owner runs keep their
+   recovery state, keys and logs and can still be explicitly released.
+   Migrated ownerless rows keep
    their logs and have a supported explicit release path after the offline upgrade.
 8. CLI, API, and follower tests show both recovery required and operator release.
    The remote-cancellation reproducer remains a known limitation until phase 2.
 
 Use local subprocesses for file-lock and surviving-child cases on macOS and Linux.
-The documentation change does not claim these implementation tests have passed.
+A local pass on one platform does not establish the result on the other; keep
+both native checks in the implementation's validation evidence.
 
 ## Phase 2: Store cancellation requests
 
